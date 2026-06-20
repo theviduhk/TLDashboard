@@ -64,8 +64,8 @@ async function loginToGrafana() {
   console.log("🔐 Logging into Grafana to get fresh session...");
 
   // ---------- HARDCODED GRAFANA CREDENTIALS ----------
-  const username = "YOUR_GRAFANA_USERNAME_HERE";  // <-- මෙය වෙනස් කරන්න
-  const password = "YOUR_GRAFANA_PASSWORD_HERE";  // <-- මෙය වෙනස් කරන්න
+  const username = "gss.kurunegala@gssintl.biz";  // <-- මෙය වෙනස් කරන්න
+  const password = "Gssk@2021";  // <-- මෙය වෙනස් කරන්න
   // --------------------------------------------------
 
   try {
