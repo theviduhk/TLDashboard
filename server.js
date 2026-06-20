@@ -40,14 +40,12 @@ const AUTH_PASS = "password123";
 function authenticate(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return false;
-  
   try {
     const base64 = authHeader.split(' ')[1];
     const credentials = Buffer.from(base64, 'base64').toString('utf8');
     const [user, pass] = credentials.split(':');
     return user === AUTH_USER && pass === AUTH_PASS;
-  } catch (err) {
-    console.error("Auth decode error:", err.message);
+  } catch {
     return false;
   }
 }
@@ -63,15 +61,15 @@ let loginPromise = null;
 
 /**
  * Grafana login කර නව session cookie එකක් ලබා ගනී
- * ✅ ඔබගේ Grafana credentials hardcode කර ඇත
+ * ⚠️ පහත ඔබගේ Grafana credentials hardcode කර ඇත
  */
 async function loginToGrafana() {
   console.log("🔐 Logging into Grafana to get fresh session...");
 
-  // ---------- HARDCODED GRAFANA CREDENTIALS ----------
+  // ---------- HARDCODED GRAFANA CREDENTIALS (ඔබ සැපයූ) ----------
   const username = "gss.kurunegala@gssintl.biz";
   const password = "Gssk@2021";
-  // --------------------------------------------------
+  // ----------------------------------------------------------------
 
   try {
     const response = await axios.post(
@@ -87,6 +85,7 @@ async function loginToGrafana() {
 
     console.log(`  Login response status: ${response.status}`);
 
+    // Set-Cookie header එකෙන් grafana_session එක උකහා ගනිමු
     const setCookieHeader = response.headers['set-cookie'];
     if (setCookieHeader) {
       const cookieArray = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
@@ -100,13 +99,12 @@ async function loginToGrafana() {
       }
     }
 
-    console.error("Login response headers:", JSON.stringify(response.headers, null, 2));
     throw new Error("Login successful but grafana_session cookie not found in response.");
   } catch (error) {
     console.error("❌ Grafana login failed:", error.message);
     if (error.response) {
       console.error("  Response status:", error.response.status);
-      console.error("  Response data:", JSON.stringify(error.response.data, null, 2));
+      console.error("  Response data:", error.response.data);
     }
     throw new Error(`Grafana login failed: ${error.message}`);
   }
@@ -145,6 +143,7 @@ async function grafanaRequest(method, url, data = null, retryCount = 0) {
     }
     return response;
   } catch (error) {
+    // Unauthorized හෝ Forbidden ආවොත්, session එක reset කර නැවත login කර try කරමු
     if (error.response && (error.response.status === 401 || error.response.status === 403) && retryCount < 2) {
       console.warn("⚠️ Session expired or invalid. Refreshing Grafana session...");
       grafanaSession = null;
@@ -327,14 +326,14 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204); res.end(); return;
   }
 
-  // Basic Auth (frontend ආරක්ෂාව)
+  // Basic Auth check
   if (!authenticate(req)) {
     console.log(`  ❌ Unauthorized: ${req.url}`);
     res.writeHead(401, {
       "WWW-Authenticate": 'Basic realm="QAT Server"',
       "Content-Type": "application/json"
     });
-    res.end(JSON.stringify({ error: "Unauthorized - Please provide valid credentials" }));
+    res.end(JSON.stringify({ error: "Unauthorized" }));
     return;
   }
 
@@ -413,8 +412,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log("================================");
   console.log(`  QAT Server running on http://${HOST}:${PORT}`);
-  console.log(`  API Basic Auth: ${AUTH_USER} / ${AUTH_PASS}`);
-  console.log("  Grafana credentials: ✅ HARDCODED");
-  console.log("  Grafana session: Auto-renewal enabled");
+  console.log(`  Basic Auth: ${AUTH_USER} / ${AUTH_PASS}`);
+  console.log("  Grafana credentials: hardcoded (auto-renewal enabled)");
   console.log("================================");
 });
