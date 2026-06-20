@@ -15,12 +15,15 @@ const QUERY_URL =
 const FIREBASE_URL  = "https://qat-output-default-rtdb.firebaseio.com";
 const FIREBASE_PATH = "/TL Hourly.json";
 
-const PORT = 3000;
+// Railway (and most hosts) assign a dynamic port via the PORT env var.
+// Falling back to 3000 keeps this working for local development too.
+const PORT = process.env.PORT || 3000;
+const HOST = "0.0.0.0"; // must bind to all interfaces, not just localhost, for Railway to route traffic in
 
 // List of all Team Leaders to fetch data for
 const TEAM_LEADERS = [
   "G26658-OTL",
-  "G25883-OTL", 
+  "G25883-OTL",
   "G22371-OTL",
   "G23179- Team Leader"
 ];
@@ -146,7 +149,7 @@ async function fetchSingleTL(tlName) {
   const rows   = processResults(result);
 
   console.log(`    Rows found: ${rows.length}`);
-  
+
   return {
     tl_name: tlName,
     rows: rows,
@@ -157,30 +160,29 @@ async function fetchSingleTL(tlName) {
 
 /*
 |--------------------------------------------------------------------------
-| FETCH ALL TEAM LEADERS DATA
+| FETCH ALL TEAM LEADERS DATA — runs in parallel to avoid gateway timeouts
 |--------------------------------------------------------------------------
 */
 async function fetchAllTeamLeaders() {
   console.log(`\n>>> Fetching data for ${TEAM_LEADERS.length} Team Leaders...`);
-  
-  const results = [];
-  
-  for (const tlName of TEAM_LEADERS) {
-    try {
-      const data = await fetchSingleTL(tlName);
-      results.push(data);
-    } catch (err) {
-      console.error(`  Error fetching ${tlName}:`, err.message);
-      results.push({
-        tl_name: tlName,
-        error: err.message,
-        rows: [],
-        total_rows: 0,
-        fetched_at: new Date().toISOString()
-      });
-    }
-  }
-  
+
+  const results = await Promise.all(
+    TEAM_LEADERS.map(async (tlName) => {
+      try {
+        return await fetchSingleTL(tlName);
+      } catch (err) {
+        console.error(`  Error fetching ${tlName}:`, err.message);
+        return {
+          tl_name: tlName,
+          error: err.message,
+          rows: [],
+          total_rows: 0,
+          fetched_at: new Date().toISOString()
+        };
+      }
+    })
+  );
+
   console.log(`\nTotal: ${results.length} team leaders processed`);
   return results;
 }
@@ -220,14 +222,21 @@ const server = http.createServer(async (req, res) => {
   const parsed   = url.parse(req.url, true);
   const pathname = parsed.pathname;
 
+  // GET / - simple health check so Railway / uptime monitors get a 200
+  if (pathname === "/" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", service: "QAT Server", time: new Date().toISOString() }));
+    return;
+  }
+
   // GET /fetch-all - fetches data for ALL team leaders
   if (pathname === "/fetch-all" && req.method === "GET") {
     try {
       const allData = await fetchAllTeamLeaders();
-      
+
       // Save to Firebase
       await saveToFirebase(allData);
-      
+
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         success: true,
@@ -249,7 +258,7 @@ const server = http.createServer(async (req, res) => {
 
     try {
       const data = await fetchSingleTL(tlName);
-      
+
       // Save to Firebase in old format for backward compatibility
       const payload = {
         updated_at:    new Date().toISOString(),
@@ -258,7 +267,7 @@ const server = http.createServer(async (req, res) => {
         data:          data.rows,
       };
       await axios.put(`${FIREBASE_URL}${FIREBASE_PATH}`, payload);
-      
+
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         success: true,
@@ -301,19 +310,18 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(404); res.end("Not found");
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   console.log("================================");
   console.log(`  QAT Server running`);
-  console.log(`  http://localhost:${PORT}`);
+  console.log(`  http://${HOST}:${PORT}`);
   console.log(`  Team Leaders (${TEAM_LEADERS.length}):`);
   TEAM_LEADERS.forEach(tl => console.log(`    - ${tl}`));
   console.log("================================");
   console.log("  Endpoints:");
+  console.log(`  GET /                    - Health check`);
   console.log(`  GET /fetch-all           - Fetch all team leaders data`);
   console.log(`  GET /fetch?tl_name=...   - Fetch specific team leader`);
   console.log(`  GET /team-leaders        - Get list of all team leaders`);
   console.log(`  GET /staff-lookup        - Get staff lookup CSV`);
-  console.log("================================");
-  console.log("  Open index.html in browser");
   console.log("================================\n");
 });
