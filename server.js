@@ -7,7 +7,7 @@ const url    = require("url");
 | CONFIG
 |--------------------------------------------------------------------------
 */
-const GRAFANA_SESSION = "dd97072a6c45dfb5be4cca947d39664a";
+const GRAFANA_SESSION = "d42e9083cb54791b86a57af95d4292a2";
 
 const QUERY_URL =
   "https://monitor-public.trax-cloud.com/api/datasources/proxy/133/bigquery/v2/projects/trax-ortal-prod/queries";
