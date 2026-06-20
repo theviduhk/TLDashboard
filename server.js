@@ -40,10 +40,16 @@ const AUTH_PASS = "password123";
 function authenticate(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return false;
-  const base64 = authHeader.split(' ')[1];
-  const credentials = Buffer.from(base64, 'base64').toString('utf8');
-  const [user, pass] = credentials.split(':');
-  return user === AUTH_USER && pass === AUTH_PASS;
+  
+  try {
+    const base64 = authHeader.split(' ')[1];
+    const credentials = Buffer.from(base64, 'base64').toString('utf8');
+    const [user, pass] = credentials.split(':');
+    return user === AUTH_USER && pass === AUTH_PASS;
+  } catch (err) {
+    console.error("Auth decode error:", err.message);
+    return false;
+  }
 }
 
 /*
@@ -52,20 +58,19 @@ function authenticate(req) {
 |--------------------------------------------------------------------------
 */
 
-// Dynamic headers - session එක මෙතන ගබඩා වේ
 let grafanaSession = null;
-let loginPromise = null; // එකවර login requests ගොඩක් යැවීම වළක්වයි
+let loginPromise = null;
 
 /**
  * Grafana login කර නව session cookie එකක් ලබා ගනී
- * ⚠️ පහත පේළි දෙකේ ඔබගේ සැබෑ Grafana ගිණුම් නාමය සහ මුරපදය ඇතුලත් කරන්න
+ * ✅ ඔබගේ Grafana credentials hardcode කර ඇත
  */
 async function loginToGrafana() {
   console.log("🔐 Logging into Grafana to get fresh session...");
 
   // ---------- HARDCODED GRAFANA CREDENTIALS ----------
-  const username = "gss.kurunegala@gssintl.biz";  // <-- මෙය වෙනස් කරන්න
-  const password = "Gssk@2021";  // <-- මෙය වෙනස් කරන්න
+  const username = "gss.kurunegala@gssintl.biz";
+  const password = "Gssk@2021";
   // --------------------------------------------------
 
   try {
@@ -74,12 +79,14 @@ async function loginToGrafana() {
       { user: username, password: password },
       {
         headers: { "Content-Type": "application/json" },
-        maxRedirects: 0, // Redirects අපිට අවශ්‍ය නැත
-        validateStatus: (status) => status < 400 || status === 401 || status === 403
+        maxRedirects: 0,
+        validateStatus: (status) => status < 400 || status === 401 || status === 403,
+        timeout: 30000
       }
     );
 
-    // Set-Cookie header එකෙන් grafana_session එක උකහා ගනිමු
+    console.log(`  Login response status: ${response.status}`);
+
     const setCookieHeader = response.headers['set-cookie'];
     if (setCookieHeader) {
       const cookieArray = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
@@ -93,11 +100,15 @@ async function loginToGrafana() {
       }
     }
 
-    // යම් හේතුවකින් session එක නොලැබුනහොත්
+    console.error("Login response headers:", JSON.stringify(response.headers, null, 2));
     throw new Error("Login successful but grafana_session cookie not found in response.");
   } catch (error) {
     console.error("❌ Grafana login failed:", error.message);
-    throw new Error("Failed to authenticate with Grafana");
+    if (error.response) {
+      console.error("  Response status:", error.response.status);
+      console.error("  Response data:", JSON.stringify(error.response.data, null, 2));
+    }
+    throw new Error(`Grafana login failed: ${error.message}`);
   }
 }
 
@@ -106,7 +117,6 @@ async function loginToGrafana() {
  */
 async function getGrafanaHeaders() {
   if (!grafanaSession) {
-    // Login කරන තෙක් ඉන්න (concurrent calls එකට හසු නොවීමට)
     if (!loginPromise) {
       loginPromise = loginToGrafana().finally(() => {
         loginPromise = null;
@@ -124,9 +134,8 @@ async function getGrafanaHeaders() {
  * Grafana request එකක් execute කරයි. 401/403 error එකක් ආවොත් session එක refresh කර නැවත try කරයි.
  */
 async function grafanaRequest(method, url, data = null, retryCount = 0) {
-  const headers = await getGrafanaHeaders();
-  
   try {
+    const headers = await getGrafanaHeaders();
     const config = { headers, timeout: 30000 };
     let response;
     if (method === 'GET') {
@@ -136,15 +145,12 @@ async function grafanaRequest(method, url, data = null, retryCount = 0) {
     }
     return response;
   } catch (error) {
-    // Unauthorized හෝ Forbidden ආවොත්, session එක reset කර නැවත login කර try කරමු
-    if ((error.response && (error.response.status === 401 || error.response.status === 403)) && retryCount < 2) {
+    if (error.response && (error.response.status === 401 || error.response.status === 403) && retryCount < 2) {
       console.warn("⚠️ Session expired or invalid. Refreshing Grafana session...");
-      grafanaSession = null; // Old session එක invalid කරමු
-      loginPromise = null;   // නැවත login වීමට ඉඩ දෙමු
-      // නැවත උත්සාහ කරමු (retry +1)
+      grafanaSession = null;
+      loginPromise = null;
       return grafanaRequest(method, url, data, retryCount + 1);
     }
-    // වෙනත් error එකක් නම් හෝ retry count ඉක්මවුනොත් throw කරමු
     throw error;
   }
 }
@@ -311,6 +317,8 @@ async function fetchStaffLookup() {
 |--------------------------------------------------------------------------
 */
 const server = http.createServer(async (req, res) => {
+  console.log(`${req.method} ${req.url}`);
+
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -321,25 +329,26 @@ const server = http.createServer(async (req, res) => {
 
   // Basic Auth (frontend ආරක්ෂාව)
   if (!authenticate(req)) {
+    console.log(`  ❌ Unauthorized: ${req.url}`);
     res.writeHead(401, {
       "WWW-Authenticate": 'Basic realm="QAT Server"',
       "Content-Type": "application/json"
     });
-    res.end(JSON.stringify({ error: "Unauthorized" }));
+    res.end(JSON.stringify({ error: "Unauthorized - Please provide valid credentials" }));
     return;
   }
 
   const parsed   = url.parse(req.url, true);
   const pathname = parsed.pathname;
 
-  if (pathname === "/" && req.method === "GET") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", service: "QAT Server", time: new Date().toISOString() }));
-    return;
-  }
+  try {
+    if (pathname === "/" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", service: "QAT Server", time: new Date().toISOString() }));
+      return;
+    }
 
-  if (pathname === "/fetch-all" && req.method === "GET") {
-    try {
+    if (pathname === "/fetch-all" && req.method === "GET") {
       const allData = await fetchAllTeamLeaders();
       await saveToFirebase(allData);
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -349,17 +358,11 @@ const server = http.createServer(async (req, res) => {
         total_leaders: allData.length,
         updated_at: new Date().toISOString()
       }));
-    } catch (err) {
-      console.error("Error:", err.message);
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: err.message }));
+      return;
     }
-    return;
-  }
 
-  if (pathname === "/fetch" && req.method === "GET") {
-    const tlName = (parsed.query.tl_name || TEAM_LEADERS[0]).trim();
-    try {
+    if (pathname === "/fetch" && req.method === "GET") {
+      const tlName = (parsed.query.tl_name || TEAM_LEADERS[0]).trim();
       const data = await fetchSingleTL(tlName);
       const payload = {
         updated_at:    new Date().toISOString(),
@@ -376,42 +379,42 @@ const server = http.createServer(async (req, res) => {
         tl_name: tlName,
         updated_at: new Date().toISOString(),
       }));
-    } catch (err) {
-      console.error("Error:", err.message);
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: err.message }));
+      return;
     }
-    return;
-  }
 
-  if (pathname === "/staff-lookup" && req.method === "GET") {
-    try {
+    if (pathname === "/staff-lookup" && req.method === "GET") {
       const csv = await fetchStaffLookup();
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ csv }));
-    } catch (err) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: err.message }));
+      return;
     }
-    return;
-  }
 
-  if (pathname === "/team-leaders" && req.method === "GET") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      team_leaders: TEAM_LEADERS,
-      count: TEAM_LEADERS.length
+    if (pathname === "/team-leaders" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        team_leaders: TEAM_LEADERS,
+        count: TEAM_LEADERS.length
+      }));
+      return;
+    }
+
+    res.writeHead(404); res.end("Not found");
+  } catch (error) {
+    console.error("❌ Server Error:", error.message);
+    console.error("  Stack:", error.stack);
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ 
+      error: error.message,
+      details: error.stack
     }));
-    return;
   }
-
-  res.writeHead(404); res.end("Not found");
 });
 
 server.listen(PORT, HOST, () => {
   console.log("================================");
   console.log(`  QAT Server running on http://${HOST}:${PORT}`);
-  console.log(`  Basic Auth: ${AUTH_USER} / ${AUTH_PASS}`);
-  console.log("  Grafana session: Auto-renewal enabled (credentials hardcoded)");
+  console.log(`  API Basic Auth: ${AUTH_USER} / ${AUTH_PASS}`);
+  console.log("  Grafana credentials: ✅ HARDCODED");
+  console.log("  Grafana session: Auto-renewal enabled");
   console.log("================================");
 });
