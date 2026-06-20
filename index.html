@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QAT Dashboard</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+
+:root{
+  --bg-solid:   rgba(6,16,30,.16);
+  --bg2-solid:  rgba(11,22,40,.16);
+  --bg3-solid:  rgba(14,28,53,.2);
+  --brd:        rgba(30,48,80,.45);
+  --brd2:       rgba(42,64,104,.45);
+  --text:       #e2e8f0;
+  --text2:      #94a3b8;
+  --text3:      #4b6080;
+  --blue:       #60a5fa;
+  --blue2:      #3b82f6;
+  --blue-dim:   rgba(15,32,64,.25);
+  --green:      #34d399;
+  --green-dim:  rgba(5,26,18,.25);
+  --amber:      #fbbf24;
+  --amber-dim:  rgba(28,18,0,.25);
+  --purple:     #a78bfa;
+  --purple-dim: rgba(30,16,64,.25);
+  --red:        #f87171;
+  --glass-blur: blur(6px);
+  --r:          10px;
+  --rs:         7px;
+}
+
+html{scroll-behavior:smooth;height:100%;}
+body{
+  font-family:'Inter',-apple-system,sans-serif;
+  background:transparent;
+  color:var(--text);
+  height:100vh;
+  padding:20px 24px 20px;
+  line-height:1.5;
+  position:relative;
+  overflow:hidden;
+}
+
+/* ── PARTICLE BG ── */
+#particles-js{
+  position:fixed;inset:0;z-index:0;
+  background:linear-gradient(135deg,#020d1e 0%,#041428 40%,#061a30 70%,#03101f 100%);
+}
+.page-content{position:relative;z-index:2;display:flex;flex-direction:column;height:100%;min-height:0;}
+
+/* ── HEADER ── */
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px;flex:0 0 auto;}
+.header-left{display:flex;align-items:center;gap:14px;}
+.logo-mark{
+  width:38px;height:38px;border-radius:9px;
+  background:linear-gradient(135deg,#1d4ed8,#7c3aed);
+  display:flex;align-items:center;justify-content:center;
+  font-size:17px;font-weight:700;color:#fff;flex-shrink:0;
+  box-shadow:0 0 22px rgba(99,102,241,.45);
+}
+.header h1{font-size:20px;font-weight:700;letter-spacing:-.3px;color:#f1f5f9;}
+.header h1 span{color:var(--blue);}
+.header h1 .ver{
+  font-size:11px;font-weight:500;color:var(--text3);
+  background:rgba(255,255,255,.05);border:1px solid var(--brd);
+  padding:2px 8px;border-radius:20px;margin-left:8px;
+  font-family:'JetBrains Mono',monospace;vertical-align:middle;
+}
+.status-badge{
+  display:flex;align-items:center;gap:8px;
+  font-size:12px;font-weight:500;color:var(--text2);
+  background:var(--bg2-solid);border:1px solid var(--brd);
+  padding:7px 14px;border-radius:20px;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--text3);transition:background .3s;}
+.dot.live   {background:var(--green); box-shadow:0 0 7px var(--green); animation:pulse 2s infinite;}
+.dot.loading{background:var(--amber); box-shadow:0 0 7px var(--amber);}
+.dot.err    {background:var(--red);   box-shadow:0 0 7px var(--red);}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── ERROR ── */
+.err-box{
+  background:rgba(28,5,5,.5);border:1px solid rgba(248,113,113,.35);
+  border-radius:var(--r);padding:12px 16px;
+  font-size:13px;color:#fca5a5;margin-bottom:14px;display:none;
+  flex:0 0 auto;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+}
+
+/* ── SEARCH CARD ── */
+.search-card{
+  background:var(--bg2-solid);border:1px solid var(--brd);
+  border-radius:var(--r);padding:20px;margin-bottom:14px;
+  position:relative;
+  flex:0 0 auto;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+}
+.card-label{
+  font-size:10px;font-weight:700;color:var(--text3);
+  text-transform:uppercase;letter-spacing:1.2px;margin-bottom:14px;
+  display:flex;align-items:center;gap:8px;
+}
+.card-label::after{content:'';flex:1;height:1px;background:var(--brd);}
+.input-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end;}
+.field label{
+  display:block;font-size:11px;font-weight:600;color:var(--text3);
+  text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;
+}
+.field .hint{font-size:11px;color:var(--text3);margin-top:6px;}
+
+/* ── TEXT INPUT ── */
+.text-input{
+  width:100%;background:rgba(4,13,26,.5);border:1px solid var(--brd2);
+  color:var(--text);padding:10px 14px;border-radius:var(--rs);
+  font-size:13px;font-family:'JetBrains Mono',monospace;outline:none;
+  transition:border-color .2s,box-shadow .2s;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+}
+.text-input:focus{border-color:var(--blue2);box-shadow:0 0 0 3px rgba(59,130,246,.15);}
+.text-input::placeholder{color:var(--text3);font-family:'Inter',sans-serif;}
+
+/* ── FETCH BUTTON ── */
+.btn-fetch{
+  background:linear-gradient(135deg,#2563eb,#1d4ed8);
+  color:#fff;border:none;padding:10px 24px;
+  border-radius:var(--rs);font-size:13px;font-weight:600;
+  font-family:'Inter',sans-serif;cursor:pointer;
+  display:flex;align-items:center;gap:8px;white-space:nowrap;height:42px;
+  transition:all .2s;box-shadow:0 4px 16px rgba(37,99,235,.4);
+}
+.btn-fetch:hover:not(:disabled){
+  background:linear-gradient(135deg,#1d4ed8,#1e40af);
+  box-shadow:0 6px 20px rgba(37,99,235,.5);transform:translateY(-1px);
+}
+.btn-fetch:active:not(:disabled){transform:translateY(0);}
+.btn-fetch:disabled{background:#1e3a5f;color:#3b82f6;cursor:not-allowed;box-shadow:none;transform:none;}
+.spinner{
+  width:14px;height:14px;border:2px solid rgba(255,255,255,.25);
+  border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* ── STATS ── */
+.stats-row{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+  gap:12px;margin-bottom:14px;
+  flex:0 0 auto;
+}
+.stat{
+  background:var(--bg2-solid);border:1px solid var(--brd);
+  border-radius:var(--r);padding:14px 16px;position:relative;overflow:hidden;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+}
+.stat::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:var(--accent,var(--brd));border-radius:2px 2px 0 0;opacity:.8;
+}
+.stat.s-blue  {--accent:var(--blue2);}
+.stat.s-amber {--accent:var(--amber);}
+.stat.s-green {--accent:var(--green);}
+.stat.s-purple{--accent:var(--purple);}
+.stat .lbl{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;}
+.stat .val{font-size:22px;font-weight:700;color:#f1f5f9;line-height:1;}
+.stat .val.sm{font-size:13px;margin-top:4px;font-weight:500;word-break:break-all;}
+.v-blue  {color:var(--blue)  !important;}
+.v-amber {color:var(--amber) !important;}
+.v-green {color:var(--green) !important;}
+.v-purple{color:var(--purple)!important;}
+
+/* ── TABLE WRAP ── */
+.table-wrap{
+  background:var(--bg2-solid);border:1px solid var(--brd);
+  border-radius:var(--r);
+  display:flex;flex-direction:column;
+  flex:1 1 auto;
+  min-height:0;
+  overflow:hidden;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+}
+.table-top{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 18px;border-bottom:1px solid var(--brd);
+  flex-wrap:wrap;gap:10px;background:var(--bg3-solid);
+  border-radius:var(--r) var(--r) 0 0;
+  flex:0 0 auto;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+}
+.table-top-left{display:flex;align-items:center;gap:10px;}
+.table-top h3{font-size:13px;font-weight:600;color:var(--text2);}
+.row-pill{
+  font-size:11px;color:var(--text3);background:var(--bg-solid);
+  padding:3px 10px;border-radius:12px;border:1px solid var(--brd);
+  font-family:'JetBrains Mono',monospace;
+}
+.filter-buttons{display:flex;gap:6px;align-items:center;}
+.filter-btn{
+  background:var(--bg-solid);border:1px solid var(--brd);
+  color:var(--text2);padding:4px 14px;border-radius:14px;
+  font-size:11px;font-weight:600;cursor:pointer;transition:all .2s;
+  font-family:'Inter',sans-serif;
+}
+.filter-btn:hover               {border-color:var(--blue2);color:#93c5fd;}
+.filter-btn.active              {background:var(--blue-dim);border-color:var(--blue2);color:#93c5fd;}
+.filter-btn.g-center            {border-color:rgba(52,211,153,.3);color:var(--green);}
+.filter-btn.g-center:hover,
+.filter-btn.g-center.active     {background:var(--green-dim);border-color:var(--green);}
+.filter-btn.k-center            {border-color:rgba(167,139,250,.3);color:var(--purple);}
+.filter-btn.k-center:hover,
+.filter-btn.k-center.active     {background:var(--purple-dim);border-color:var(--purple);}
+
+/* ── TABLE SCROLL ── */
+.tscroll{overflow:auto;flex:1 1 auto;min-height:0;border-radius:0 0 var(--r) var(--r);}
+.tscroll::-webkit-scrollbar{width:8px;height:8px;}
+.tscroll::-webkit-scrollbar-track{background:var(--bg-solid);}
+.tscroll::-webkit-scrollbar-thumb{background:var(--brd2);border-radius:4px;}
+.tscroll::-webkit-scrollbar-thumb:hover{background:var(--blue2);}
+.tscroll::-webkit-scrollbar-corner{background:var(--bg-solid);}
+
+/* ── TABLE ── */
+table{width:100%;border-collapse:collapse;font-size:12.5px;table-layout:fixed;}
+
+/* Frozen column widths — exact pixel values used in both CSS & JS */
+/* GID=80 | Name=145 | Primary=115 | TeamLead=115 | Total=90 */
+/* left offsets: Name=80, Primary=225, TeamLead=340, Total=455 */
+
+thead th{
+  padding:10px 12px;text-align:center;
+  font-size:10px;font-weight:700;color:var(--text3);
+  text-transform:uppercase;letter-spacing:.6px;
+  background:var(--bg3-solid);
+  border-bottom:2px solid var(--brd2);
+  white-space:nowrap;position:sticky;top:0;z-index:4;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+}
+/* frozen header cells */
+thead th.th-gid    {text-align:left;left:0;   z-index:9;width:80px; min-width:80px; background:var(--bg3-solid);}
+thead th.th-name   {text-align:left;left:80px; z-index:8;width:145px;min-width:145px;background:var(--bg3-solid);}
+thead th.th-pri    {text-align:left;left:225px;z-index:8;width:115px;min-width:115px;background:var(--bg3-solid);}
+thead th.th-tl     {text-align:left;left:340px;z-index:8;width:115px;min-width:115px;background:var(--bg3-solid);}
+thead th.th-total  {
+  text-align:center;left:455px;z-index:8;width:90px;min-width:90px;
+  background:var(--bg3-solid);color:var(--green);
+  border-right:2px solid var(--brd2);
+}
+thead th.th-hour   {
+  color:var(--blue);font-family:'JetBrains Mono',monospace;
+  min-width:72px;width:72px;
+}
+/* all frozen headers sticky */
+thead th.th-gid,thead th.th-name,thead th.th-pri,thead th.th-tl,thead th.th-total{
+  position:sticky;
+}
+
+/* ── BODY CELLS ── */
+tbody td{
+  padding:9px 12px;
+  border-bottom:1px solid rgba(30,50,90,.5);
+  background:var(--bg2-solid);
+  transition:background .12s;
+  white-space:nowrap;vertical-align:middle;text-align:center;
+  overflow:hidden;text-overflow:ellipsis;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+}
+tbody tr:hover td{background:rgba(15,31,56,.28);}
+
+/* frozen body cells */
+tbody td.td-gid  {position:sticky;left:0;   z-index:3;width:80px; min-width:80px; background:var(--bg2-solid);text-align:left;}
+tbody td.td-name {position:sticky;left:80px; z-index:3;width:145px;min-width:145px;background:var(--bg2-solid);text-align:left;}
+tbody td.td-pri  {position:sticky;left:225px;z-index:3;width:115px;min-width:115px;background:var(--bg2-solid);text-align:left;}
+tbody td.td-tl   {position:sticky;left:340px;z-index:3;width:115px;min-width:115px;background:var(--bg2-solid);text-align:left;}
+tbody td.td-total{
+  position:sticky;left:455px;z-index:3;width:90px;min-width:90px;
+  background:var(--bg2-solid);text-align:center;
+  border-right:2px solid var(--brd2);
+}
+
+tbody tr:hover td.td-gid,
+tbody tr:hover td.td-name,
+tbody tr:hover td.td-pri,
+tbody tr:hover td.td-tl,
+tbody tr:hover td.td-total{background:rgba(15,31,56,.28);}
+
+/* ── TOTAL ROW OVERRIDES ── */
+/* GSSC total */
+tbody tr.tr-g td                   {background:rgba(4,15,8,.2) !important;border-top:2px solid rgba(52,211,153,.4);border-bottom:none;backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);}
+tbody tr.tr-g td.td-gid,
+tbody tr.tr-g td.td-name,
+tbody tr.tr-g td.td-pri,
+tbody tr.tr-g td.td-tl,
+tbody tr.tr-g td.td-total          {background:rgba(4,15,8,.2) !important;}
+tbody tr.tr-g td .num              {color:var(--green);}
+
+/* GSSK total */
+tbody tr.tr-k td                   {background:rgba(8,4,26,.2) !important;border-top:2px solid rgba(167,139,250,.4);border-bottom:none;backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);}
+tbody tr.tr-k td.td-gid,
+tbody tr.tr-k td.td-name,
+tbody tr.tr-k td.td-pri,
+tbody tr.tr-k td.td-tl,
+tbody tr.tr-k td.td-total          {background:rgba(8,4,26,.2) !important;}
+tbody tr.tr-k td .num              {color:var(--purple);}
+
+/* Grand total */
+tbody tr.tr-both td                {background:rgba(18,14,0,.2) !important;border-top:3px solid rgba(251,191,36,.45);border-bottom:none;backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);}
+tbody tr.tr-both td.td-gid,
+tbody tr.tr-both td.td-name,
+tbody tr.tr-both td.td-pri,
+tbody tr.tr-both td.td-tl,
+tbody tr.tr-both td.td-total       {background:rgba(18,14,0,.2) !important;}
+tbody tr.tr-both td .num           {color:var(--amber);font-weight:700;}
+
+/* separator */
+tbody tr.sep td{padding:0;height:5px;background:rgba(2,8,16,.12) !important;border:none;}
+
+/* ── BADGES & VALUE STYLES ── */
+.badge{
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:600;padding:2px 8px;border-radius:9px;
+  font-family:'JetBrains Mono',monospace;letter-spacing:.2px;
+}
+.b-g{background:rgba(52,211,153,.12);color:var(--green);border:1px solid rgba(52,211,153,.28);}
+.b-k{background:rgba(167,139,250,.12);color:var(--purple);border:1px solid rgba(167,139,250,.28);}
+
+.num {font-family:'JetBrains Mono',monospace;font-weight:500;color:var(--amber);font-size:12px;}
+.ts  {color:var(--text3);font-size:11px;}
+.name-text{font-size:12px;color:var(--text2);font-weight:500;}
+.sub-text {font-size:11px;color:var(--text3);}
+
+/* total chips */
+.chip-staff{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--green); background:rgba(52,211,153,.1); border:1px solid rgba(52,211,153,.25); padding:2px 9px;border-radius:9px;}
+.chip-g    {display:inline-block;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--green); background:rgba(52,211,153,.12); border:1px solid rgba(52,211,153,.3);  padding:3px 11px;border-radius:9px;}
+.chip-k    {display:inline-block;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--purple);background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.3); padding:3px 11px;border-radius:9px;}
+.chip-both {display:inline-block;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--amber); background:rgba(251,191,36,.12); border:1px solid rgba(251,191,36,.3);  padding:3px 11px;border-radius:9px;}
+
+.tlabel{font-size:12px;font-weight:700;}
+.tlabel.g   {color:var(--green);}
+.tlabel.k   {color:var(--purple);}
+.tlabel.both{color:var(--amber);}
+
+/* empty state */
+.empty{text-align:center;padding:60px 20px;}
+.empty .ico{font-size:36px;margin-bottom:12px;}
+.empty p{font-size:14px;color:var(--text2);}
+
+@media(max-width:700px){
+  .input-row{grid-template-columns:1fr;}
+  body{padding:14px 14px 30px;height:auto;overflow:auto;}
+  .page-content{height:auto;}
+  .table-wrap{flex:none;}
+  .tscroll{max-height:70vh;}
+}
+</style>
+</head>
+<body>
+
+<div id="particles-js"></div>
+
+<div class="page-content">
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-left">
+    <div class="logo-mark">Q</div>
+    <h1>QAT <span>Dashboard</span> <span class="ver">v3</span></h1>
+  </div>
+  <div class="status-badge">
+    <div class="dot" id="dot"></div>
+    <span id="statusTxt">Ready</span>
+  </div>
+</div>
+
+<!-- ERROR -->
+<div class="err-box" id="errBox"></div>
+
+<!-- SEARCH -->
+<div class="search-card">
+  <div class="card-label">Select Team Lead</div>
+  <div class="input-row">
+    <div class="field">
+      <label>TL Name</label>
+      <input class="text-input" id="tlInput" placeholder="e.g. G26658-OTL" autocomplete="off" value="G26658-OTL" />
+      <div class="hint">All projects &amp; all tasks under this TL will be pulled — staff_id rows only.</div>
+    </div>
+    <button class="btn-fetch" id="fetchBtn" onclick="doFetch()">
+      <span id="btnInner">Fetch Data</span>
+    </button>
+  </div>
+</div>
+
+<!-- STATS -->
+<div class="stats-row">
+  <div class="stat s-blue">  <div class="lbl">TL Name</div>  <div class="val sm v-blue"   id="sTL">—</div></div>
+  <div class="stat s-amber"> <div class="lbl">Projects</div> <div class="val v-amber"     id="sProjects">—</div></div>
+  <div class="stat s-amber"> <div class="lbl">Tasks</div>    <div class="val v-amber"     id="sTasks">—</div></div>
+  <div class="stat s-blue">  <div class="lbl">Total Staff</div><div class="val v-blue"    id="sStaff">—</div></div>
+  <div class="stat s-green"> <div class="lbl">GSSC Total</div><div class="val v-green"    id="sGSSC">—</div></div>
+  <div class="stat s-purple"><div class="lbl">GSSK Total</div><div class="val v-purple"   id="sGSSK">—</div></div>
+</div>
+
+<!-- TABLE -->
+<div class="table-wrap">
+  <div class="table-top">
+    <div class="table-top-left">
+      <h3>Hourly Results by Staff</h3>
+      <span class="row-pill" id="rowPill">0 staff</span>
+    </div>
+    <div class="filter-buttons">
+      <button class="filter-btn active"   id="filterAll" onclick="setFilter('all')">All</button>
+      <button class="filter-btn g-center" id="filterG"   onclick="setFilter('g')">🟢 GSSC</button>
+      <button class="filter-btn k-center" id="filterK"   onclick="setFilter('k')">🟣 GSSK</button>
+    </div>
+  </div>
+  <div class="tscroll">
+    <table id="mainTable">
+      <thead><tr id="theadRow">
+        <th class="th-gid">GID</th>
+        <th class="th-name">Name</th>
+        <th class="th-pri">Primary</th>
+        <th class="th-tl">TeamLead</th>
+        <th class="th-total">Total</th>
+        <th class="th-hour">—</th>
+      </tr></thead>
+      <tbody id="tbody">
+        <tr><td colspan="6"><div class="empty">
+          <div class="ico">🔍</div>
+          <p>TL Name එක type කරලා <strong>Fetch Data</strong> click කරන්න</p>
+        </div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</div><!-- /page-content -->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/particles.js/2.0.0/particles.min.js"></script>
+<script>
+/* ── PARTICLES ── */
+window.addEventListener('load',function(){
+  if(typeof particlesJS==='undefined') return;
+  particlesJS("particles-js",{
+    particles:{
+      number:{value:55,density:{enable:true,value_area:900}},
+      color:{value:"#4a90d9"},
+      shape:{type:"circle"},
+      opacity:{value:.3,random:true,anim:{enable:true,speed:.4,opacity_min:.05,sync:false}},
+      size:{value:2.2,random:true,anim:{enable:true,speed:1,size_min:.3,sync:false}},
+      line_linked:{enable:true,distance:155,color:"#2d6abf",opacity:.18,width:1},
+      move:{enable:true,speed:.7,direction:"none",random:true,straight:false,out_mode:"out",bounce:false}
+    },
+    interactivity:{
+      detect_on:"canvas",
+      events:{onhover:{enable:true,mode:"repulse"},onclick:{enable:true,mode:"push"},resize:true},
+      modes:{repulse:{distance:110,duration:.4},push:{particles_nb:3}}
+    },
+    retina_detect:true
+  });
+});
+
+/* ── CONFIG ── */
+const SERVER="http://localhost:3000";
+const STAFF_LOOKUP_URL=`${SERVER}/staff-lookup`;
+const DEFAULT_TL="G26658-OTL";
+
+/* ── FIXED HOUR SCHEDULE: 05:30 AM → 04:30 AM (next day), every 1 hour ── */
+function genFixedHours(){
+  const labels=[];
+  const start=5*60+30;      // 05:30 AM in minutes-from-midnight
+  const totalSlots=24;      // 05:30 AM, 06:30 AM, ... 04:30 AM next day (24 hourly slots)
+  for(let i=0;i<totalSlots;i++){
+    const m=start+i*60;
+    const dayMin=((m%1440)+1440)%1440;
+    let h=Math.floor(dayMin/60), mm=dayMin%60;
+    const ap=h>=12?'PM':'AM';
+    let hh=h%12; if(hh===0) hh=12;
+    labels.push(`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')} ${ap}`);
+  }
+  return labels;
+}
+const FIXED_HOURS=genFixedHours();
+
+let currentFilter='all',cachedStaffData={},cachedHourColumns=FIXED_HOURS,staffLookup={};
+let sortDir='desc';
+function toggleSort(){
+  sortDir=sortDir==='desc'?'asc':'desc';
+  renderWithFilter(currentFilter);
+}
+
+/* ── STAFF LOOKUP ── */
+async function loadStaffLookup(){
+  try{
+    const res=await fetch(STAFF_LOOKUP_URL);
+    if(!res.ok) throw new Error('lookup failed');
+    const data=await res.json();
+    if(data.error) throw new Error(data.error);
+    const lines=data.csv.split('\n').filter(l=>l.trim());
+    if(lines.length<2) return;
+    const hdr=lines[0].split(',').map(h=>h.trim().toLowerCase());
+    const qi=hdr.findIndex(h=>h.includes('qat')||h.includes('id'));
+    const ni=hdr.findIndex(h=>h.includes('name'));
+    const pi=hdr.findIndex(h=>h.includes('primary'));
+    const ti=hdr.findIndex(h=>h.includes('team')||h.includes('teamlead')||h.includes('shift sup'));
+    if(qi===-1) return;
+    for(let i=1;i<lines.length;i++){
+      const c=lines[i].split(',').map(x=>x.trim());
+      const id=c[qi]; if(!id) continue;
+      staffLookup[id]={
+        name:    ni!==-1?c[ni] ||'—':'—',
+        primary: pi!==-1?c[pi] ||'—':'—',
+        teamlead:ti!==-1?c[ti] ||'—':'—'
+      };
+    }
+  }catch(e){console.warn('staff lookup:',e);}
+}
+function getInfo(id){
+  const s=staffLookup[id];
+  return s?{name:s.name||'—',primary:s.primary||'—',teamlead:s.teamlead||'—'}
+          :{name:'—',primary:'—',teamlead:'—'};
+}
+
+/* ── CENTER ── */
+function getCenter(id){
+  if(!id) return 'unknown';
+  const c=id.charAt(0).toLowerCase();
+  return c==='g'?'g':c==='k'?'k':'unknown';
+}
+
+/* ── FETCH ── */
+async function doFetch(){
+  const tlInputEl=document.getElementById('tlInput');
+  const tlName=tlInputEl.value.trim()||DEFAULT_TL;
+  tlInputEl.value=tlName;
+  const eb=document.getElementById('errBox'); eb.style.display='none';
+  if(!tlName){showErr('TL Name එක type කරන්න.');return;}
+  setBusy(true); setStatus('loading','Fetching…');
+  try{
+    await loadStaffLookup();
+    const res=await fetch(`${SERVER}/fetch?tl_name=${encodeURIComponent(tlName)}`);
+    const json=await res.json();
+    if(!res.ok) throw new Error(json.error||'Server error');
+    const rows=json.rows||[];
+    const {staffData,hourColumns}=processPivotData(rows);
+    cachedStaffData=staffData; cachedHourColumns=hourColumns;
+    const ids=Object.keys(staffData);
+    const gT=sumCenter(staffData,'g'), kT=sumCenter(staffData,'k');
+    const projCount=new Set(rows.map(r=>r.project_name).filter(Boolean)).size;
+    const taskCount=new Set(rows.map(r=>r.task_name).filter(Boolean)).size;
+    document.getElementById('sTL').textContent      =json.tl_name||tlName;
+    document.getElementById('sProjects').textContent=projCount;
+    document.getElementById('sTasks').textContent   =taskCount;
+    document.getElementById('sStaff').textContent   =ids.length;
+    document.getElementById('sGSSC').textContent    =gT.toLocaleString();
+    document.getElementById('sGSSK').textContent    =kT.toLocaleString();
+    renderWithFilter(currentFilter);
+    setStatus('live','Live');
+  }catch(err){
+    const msg=err.message.includes('Failed to fetch')
+      ?"Server connect වෙන්න බැරිඋනා — 'node server.js' run කරලා ඇද්ද?"
+      :err.message;
+    showErr(msg); setStatus('err','Error');
+  }
+  setBusy(false);
+}
+function sumCenter(sd,ctr){
+  return Object.entries(sd).filter(([id])=>getCenter(id)===ctr)
+    .reduce((acc,[,hrs])=>acc+Object.values(hrs).reduce((a,b)=>a+b,0),0);
+}
+
+/* ── PIVOT ── */
+function processPivotData(rows){
+  const sm={};
+  rows.forEach(r=>{
+    const id=r.staff_id||'Unknown',hk=fmtHour(r.timestamp),v=Number(r.value||0);
+    if(!sm[id]) sm[id]={};
+    sm[id][hk]=(sm[id][hk]||0)+v;
+  });
+  /* Use the FIXED 05:30 AM → 04:30 AM (next day) half-hour schedule as the
+     column set, instead of whatever hours happen to appear in the data.
+     Values are looked up against this fixed schedule so each value lands
+     in its correct time-slot column. Rows from every project/task for a
+     given staff_id are summed together into that staff member's hourly total. */
+  return{staffData:sm,hourColumns:FIXED_HOURS};
+}
+function toMins(ts){
+  if(!ts||ts==='—') return 0;
+  const m=ts.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/);
+  if(!m) return 0;
+  let h=parseInt(m[1]),min=parseInt(m[2]);
+  if(m[3]==='PM'&&h!==12)h+=12;
+  if(m[3]==='AM'&&h===12)h=0;
+  return h*60+min;
+}
+function fmtHour(ts){
+  if(!ts||ts==='—') return '—';
+  let d;
+  if(/^[\d.eE+\-]+$/.test(String(ts).trim())) d=new Date(parseFloat(ts)*1000);
+  else d=new Date(String(ts).replace(' ','T'));
+  if(isNaN(d.getTime())) return String(ts);
+  let h=d.getHours();
+  const mm=String(d.getMinutes()).padStart(2,'0');
+  const ap=h>=12?'PM':'AM';
+  h=h%12||12;
+  return `${String(h).padStart(2,'0')}:${mm} ${ap}`;
+}
+
+/* ── FILTER ── */
+function setFilter(f){
+  currentFilter=f;
+  document.getElementById('filterAll').className='filter-btn'          +(f==='all'?' active':'');
+  document.getElementById('filterG').className  ='filter-btn g-center'+(f==='g'  ?' active':'');
+  document.getElementById('filterK').className  ='filter-btn k-center'+(f==='k'  ?' active':'');
+  renderWithFilter(f);
+}
+function renderWithFilter(f){
+  let ids=Object.keys(cachedStaffData);
+  if(f==='g') ids=ids.filter(id=>getCenter(id)==='g');
+  if(f==='k') ids=ids.filter(id=>getCenter(id)==='k');
+  renderTable(cachedStaffData,cachedHourColumns,ids);
+}
+
+/* ── RENDER TABLE ── */
+function renderTable(sd,hc,staffIds){
+  const thead=document.getElementById('theadRow');
+  const tbody=document.getElementById('tbody');
+  const BG3='rgba(14,28,53,.22)';
+  const GLASS='backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);';
+
+  /* ---- header ---- */
+  let hh=`
+    <th class="th-gid"   style="position:sticky;top:0;left:0;   z-index:9;background:${BG3};${GLASS}">GID</th>
+    <th class="th-name"  style="position:sticky;top:0;left:80px; z-index:8;background:${BG3};${GLASS}">Name</th>
+    <th class="th-pri"   style="position:sticky;top:0;left:225px;z-index:8;background:${BG3};${GLASS}">Primary</th>
+    <th class="th-tl"    style="position:sticky;top:0;left:340px;z-index:8;background:${BG3};${GLASS}">TeamLead</th>
+    <th class="th-total" style="position:sticky;top:0;left:455px;z-index:8;background:${BG3};${GLASS}border-right:2px solid var(--brd2);cursor:pointer;user-select:none;" onclick="toggleSort()" title="Click to sort">Total ${sortDir==='desc'?'▼':'▲'}</th>`;
+  hc.forEach(h=>{hh+=`<th class="th-hour">${esc(h)}</th>`;});
+  thead.innerHTML=hh;
+
+  /* empty state */
+  if(!staffIds.length){
+    const msg=currentFilter==='g'?'GSSC center staff data නැත'
+             :currentFilter==='k'?'GSSK center staff data නැත':'Data නැත';
+    tbody.innerHTML=`<tr><td colspan="${5+hc.length}"><div class="empty">
+      <div class="ico">📭</div><p>${msg}</p></div></td></tr>`;
+    document.getElementById('rowPill').textContent='0 staff'; return;
+  }
+
+  /* sort ALL staff together by total */
+  function staffTotal(id){ return hc.reduce((s,h)=>(sd[id]?s+(sd[id][h]||0):s),0); }
+  const cmp=(a,b)=>sortDir==='desc'?staffTotal(b)-staffTotal(a):staffTotal(a)-staffTotal(b);
+  
+  /* Sort all staff together - GSSC and GSSK mixed */
+  const allStaffIds = staffIds.sort(cmp);
+  
+  const gH={},kH={},bH={};
+  hc.forEach(h=>{gH[h]=0;kH[h]=0;bH[h]=0;});
+  let gGT=0,kGT=0,bGT=0,html='';
+
+  /* All staff rows - GSSC and GSSK together sorted by total */
+  allStaffIds.forEach(id=>{
+    const hrs=sd[id],info=getInfo(id); let t=0;
+    const center = getCenter(id);
+    hc.forEach(h=>{const v=hrs[h]||0;t+=v;bH[h]+=v;});
+    bGT += t;
+    
+    if(center === 'g') {
+      gGT += t;
+      hc.forEach(h=>{gH[h]+=(hrs[h]||0);});
+      html+=sRow(id,info,'g',t,hrs,hc);
+    } else if(center === 'k') {
+      kGT += t;
+      hc.forEach(h=>{kH[h]+=(hrs[h]||0);});
+      html+=sRow(id,info,'k',t,hrs,hc);
+    } else {
+      // unknown center - treat as other
+      html+=sRow(id,info,'other',t,hrs,hc);
+    }
+  });
+
+  /* ---- TOTALS AT THE BOTTOM ---- */
+  /* Separator before totals */
+  if(allStaffIds.length){
+    html += `<tr class="sep"><td colspan="${5+hc.length}"></td></tr>`;
+  }
+
+  /* GSSC Total */
+  html+=tRow('tr-g','🟢','GSSC Total',gGT,gH,hc,'chip-g','g','#040f08');
+  
+  /* GSSK Total */
+  html+=tRow('tr-k','🟣','GSSK Total',kGT,kH,hc,'chip-k','k','#08041a');
+  
+  /* Grand Total - last row */
+  html+=tRow('tr-both','⭐','Grand Total',bGT,bH,hc,'chip-both','both','#120e00');
+
+  tbody.innerHTML=html;
+  let lbl=staffIds.length+' staff';
+  if(currentFilter==='g') lbl+=' (GSSC)';
+  else if(currentFilter==='k') lbl+=' (GSSK)';
+  document.getElementById('rowPill').textContent=lbl;
+}
+
+/* staff data row */
+function sRow(id,info,ctr,total,hrs,hc){
+  const BG='rgba(11,22,40,.18)';
+  const GLASS='backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);';
+  let r=`<tr>`;
+  r+=`<td class="td-gid"   style="background:${BG};${GLASS}"><span class="name-text">${esc(id)}</span></td>`;
+  r+=`<td class="td-name"  style="background:${BG};${GLASS}"><span class="name-text" title="${esc(info.name)}">${esc(info.name)}</span></td>`;
+  r+=`<td class="td-pri"   style="background:${BG};${GLASS}"><span class="sub-text"  title="${esc(info.primary)}">${esc(info.primary)}</span></td>`;
+  r+=`<td class="td-tl"    style="background:${BG};${GLASS}border-right:2px solid var(--brd2);"><span class="sub-text" title="${esc(info.teamlead)}">${esc(info.teamlead)}</span></td>`;
+  r+=`<td class="td-total" style="background:${BG};${GLASS}text-align:center;border-right:2px solid var(--brd2);"><span class="chip-staff">${total.toLocaleString()}</span></td>`;
+  hc.forEach(h=>{
+    const v=hrs[h]||0;
+    r+=v>0?`<td class="num">${v.toLocaleString()}</td>`:`<td class="ts">—</td>`;
+  });
+  r+=`</tr>`;
+  return r;
+}
+
+/* total summary row */
+function tRow(cls,icon,label,grand,hTotals,hc,chipCls,variant,bg){
+  let r=`<tr class="${cls}">`;
+  r+=`<td class="td-gid"  style="background:${bg};">${icon}</td>`;
+  r+=`<td class="td-name" style="background:${bg};"><span class="tlabel ${variant}">${esc(label)}</span></td>`;
+  r+=`<td class="td-pri"  style="background:${bg};"></td>`;
+  r+=`<td class="td-tl"   style="background:${bg};border-right:2px solid var(--brd2);"></td>`;
+  r+=`<td class="td-total" style="background:${bg};text-align:center;border-right:2px solid var(--brd2);">
+        <span class="${chipCls}">${grand.toLocaleString()}</span></td>`;
+  hc.forEach(h=>{
+    r+=`<td class="num" style="text-align:center;">${hTotals[h].toLocaleString()}</td>`;
+  });
+  r+=`</tr>`;
+  return r;
+}
+
+/* ── UTILS ── */
+function setBusy(on){
+  document.getElementById('fetchBtn').disabled=on;
+  document.getElementById('btnInner').innerHTML=on?'<div class="spinner"></div> Loading…':'Fetch Data';
+}
+function setStatus(t,txt){
+  document.getElementById('statusTxt').textContent=txt;
+  document.getElementById('dot').className='dot'+(t==='ready'?'':` ${t}`);
+}
+function showErr(msg){
+  const b=document.getElementById('errBox');b.textContent='⚠️  '+msg;b.style.display='block';
+}
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* Enter key triggers fetch from the TL Name field */
+document.getElementById('tlInput').addEventListener('keydown',e=>{
+  if(e.key==='Enter') doFetch();
+});
+
+loadStaffLookup();
+renderWithFilter(currentFilter);
+</script>
+</body>
+</html>
