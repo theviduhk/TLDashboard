@@ -1,25 +1,340 @@
-const axios = require("axios");
-const { parse } = require("csv-parse/sync");
+const axios  = require("axios");
+const http   = require("http");
+const url    = require("url");
 
-// Your existing sheet URL for staff
+/*
+|--------------------------------------------------------------------------
+| CONFIG
+|--------------------------------------------------------------------------
+*/
+const QUERY_URL =
+  "https://monitor-public.trax-cloud.com/api/datasources/proxy/133/bigquery/v2/projects/trax-ortal-prod/queries";
+
+const FIREBASE_URL  = "https://qat-output-default-rtdb.firebaseio.com";
+const FIREBASE_PATH = "/TL Hourly.json";
+
+// Railway port config
+const PORT = process.env.PORT || 3000;
+const HOST = "0.0.0.0";
+
+// Team Leaders
+const TEAM_LEADERS = [
+  "G26658-OTL",
+  "G25883-OTL",
+  "G22371-OTL",
+  "G23179- Team Leader"
+];
+
+// Staff lookup sheet
 const STAFF_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vTcJSktGEdHycbjqLx-YD7-V1DUCH462h64XxaiuyKv9iK6n2FXgh6VAYvFEkS83DI76b2HJfppeuzd/pub?gid=1860286382&output=csv";
 
-// The new sheet URL for project and task data
+// Project/Task lookup sheet
 const PROJECT_TASK_SHEET_URL = () =>
     `https://docs.google.com/spreadsheets/d/e/2PACX-1vTcJSktGEdHycbjqLx-YD7-V1DUCH462h64XxaiuyKv9iK6n2FXgh6VAYvFEkS83DI76b2HJfppeuzd/pub?gid=822634964&output=csv&_=${Date.now()}`;
 
-// Cache for the lookup data to avoid frequent sheet reads
-let lookupCache = {
-  data: null,
-  timestamp: null,
-  cacheDuration: 5 * 60 * 1000 // 5 minutes cache
+/*
+|--------------------------------------------------------------------------
+| HARDCODED BASIC AUTH (frontend ආරක්ෂාව සඳහා)
+|--------------------------------------------------------------------------
+*/
+const AUTH_USER = "admin";
+const AUTH_PASS = "password123";
+
+// ─── CORS Headers ────────────────────────────────────────────────────────────
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Accept",
+  "Access-Control-Allow-Credentials": "true",
+  "Access-Control-Max-Age": "86400" // 24 hours
 };
 
+function setCorsHeaders(res) {
+  Object.entries(CORS_HEADERS).forEach(([key, value]) => {
+    res.setHeader(key, value);
+  });
+}
+
+function authenticate(req) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return false;
+  try {
+    const base64 = authHeader.split(' ')[1];
+    const credentials = Buffer.from(base64, 'base64').toString('utf8');
+    const [user, pass] = credentials.split(':');
+    return user === AUTH_USER && pass === AUTH_PASS;
+  } catch {
+    return false;
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| GRAFANA SESSION MANAGER (Auto-login & Retry)
+|--------------------------------------------------------------------------
+*/
+
+let grafanaSession = null;
+let loginPromise = null;
+
 /**
- * Fetch and parse the project/task lookup sheet
- * Returns an array of objects with project_name, task_name, and other fields
+ * Grafana login කර නව session cookie එකක් ලබා ගනී
+ * ⚠️ පහත ඔබගේ Grafana credentials hardcode කර ඇත
  */
+async function loginToGrafana() {
+  console.log("🔐 Logging into Grafana to get fresh session...");
+
+  // ---------- HARDCODED GRAFANA CREDENTIALS (ඔබ සැපයූ) ----------
+  const username = "gss.kurunegala@gssintl.biz";
+  const password = "Gssk@2021";
+  // ----------------------------------------------------------------
+
+  try {
+    const response = await axios.post(
+      "https://monitor-public.trax-cloud.com/login",
+      { user: username, password: password },
+      {
+        headers: { "Content-Type": "application/json" },
+        maxRedirects: 0,
+        validateStatus: (status) => status < 400 || status === 401 || status === 403,
+        timeout: 30000
+      }
+    );
+
+    console.log(`  Login response status: ${response.status}`);
+
+    // Set-Cookie header එකෙන් grafana_session එක උකහා ගනිමු
+    const setCookieHeader = response.headers['set-cookie'];
+    if (setCookieHeader) {
+      const cookieArray = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+      for (const cookie of cookieArray) {
+        const match = cookie.match(/grafana_session=([^;]+)/);
+        if (match) {
+          grafanaSession = match[1];
+          console.log("✅ New Grafana session obtained successfully!");
+          return grafanaSession;
+        }
+      }
+    }
+
+    throw new Error("Login successful but grafana_session cookie not found in response.");
+  } catch (error) {
+    console.error("❌ Grafana login failed:", error.message);
+    if (error.response) {
+      console.error("  Response status:", error.response.status);
+      console.error("  Response data:", error.response.data);
+    }
+    throw new Error(`Grafana login failed: ${error.message}`);
+  }
+}
+
+/**
+ * Current headers ලබා ගනී. session එක null නම් auto-login වේ.
+ */
+async function getGrafanaHeaders() {
+  if (!grafanaSession) {
+    if (!loginPromise) {
+      loginPromise = loginToGrafana().finally(() => {
+        loginPromise = null;
+      });
+    }
+    await loginPromise;
+  }
+  return {
+    "Content-Type": "application/json",
+    "Cookie": `grafana_session=${grafanaSession}`
+  };
+}
+
+/**
+ * Grafana request එකක් execute කරයි. 401/403 error එකක් ආවොත් session එක refresh කර නැවත try කරයි.
+ */
+async function grafanaRequest(method, url, data = null, retryCount = 0) {
+  try {
+    const headers = await getGrafanaHeaders();
+    const config = { headers, timeout: 30000 };
+    let response;
+    if (method === 'GET') {
+      response = await axios.get(url, config);
+    } else if (method === 'POST') {
+      response = await axios.post(url, data, config);
+    }
+    return response;
+  } catch (error) {
+    // Unauthorized හෝ Forbidden ආවොත්, session එක reset කර නැවත login කර try කරමු
+    if (error.response && (error.response.status === 401 || error.response.status === 403) && retryCount < 2) {
+      console.warn("⚠️ Session expired or invalid. Refreshing Grafana session...");
+      grafanaSession = null;
+      loginPromise = null;
+      return grafanaRequest(method, url, data, retryCount + 1);
+    }
+    throw error;
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| BIGQUERY — poll until job complete (with auto-session)
+|--------------------------------------------------------------------------
+*/
+async function getQueryResults(resultUrl) {
+  for (let i = 0; i < 10; i++) {
+    const res = await grafanaRequest('GET', resultUrl);
+    if (res.data.jobComplete) return res.data;
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  throw new Error("BigQuery job timeout");
+}
+
+/*
+|--------------------------------------------------------------------------
+| BUILD SQL
+|--------------------------------------------------------------------------
+*/
+function buildQuery(tlName) {
+  return {
+    query: `
+      #standardSQL
+      SELECT
+        TIMESTAMP_TRUNC(event_timestamp, HOUR) AS timestamp,
+        project_name,
+        task_name,
+        staff_id,
+        SUM(
+          CASE
+            WHEN LOWER(TRIM(task_name)) = 'stitching' THEN number_of_probes
+            ELSE count
+          END
+        ) AS value
+      FROM \`trax-retail.backoffice.tl_hourly_report\`
+      WHERE
+        event_timestamp BETWEEN
+          TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), DAY)
+          AND CURRENT_TIMESTAMP()
+        AND task_name    IS NOT NULL
+        AND project_name IS NOT NULL
+        AND team_leader_staff_id = '${tlName}'
+      GROUP BY 1, 2, 3, 4
+      ORDER BY timestamp
+    `,
+    useLegacySql: false,
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| PROCESS ROWS
+|--------------------------------------------------------------------------
+*/
+function processResults(result) {
+  if (!result.rows) return [];
+  const fields = result.schema.fields.map(f => f.name);
+  return result.rows
+    .map(row => {
+      const obj = {};
+      row.f.forEach((cell, i) => { obj[fields[i]] = cell.v; });
+      return obj;
+    })
+    .filter(obj => {
+      const staff = String(obj.staff_id || "").trim().toLowerCase();
+      return staff !== "" && staff !== "auto_stitch";
+    })
+    .map(obj => ({
+      timestamp:    obj.timestamp    || "",
+      project_name: obj.project_name || "",
+      task_name:    obj.task_name    || "",
+      staff_id:     obj.staff_id     || "",
+      value:        Number(obj.value || 0),
+    }));
+}
+
+/*
+|--------------------------------------------------------------------------
+| FIREBASE
+|--------------------------------------------------------------------------
+*/
+async function saveToFirebase(allData) {
+  const payload = {
+    updated_at:    new Date().toISOString(),
+    total_leaders: allData.length,
+    data:          allData
+  };
+  await axios.put(`${FIREBASE_URL}${FIREBASE_PATH}`, payload);
+  console.log(`  Firebase updated: ${allData.length} team leaders data`);
+}
+
+/*
+|--------------------------------------------------------------------------
+| FETCH SINGLE TL
+|--------------------------------------------------------------------------
+*/
+async function fetchSingleTL(tlName) {
+  console.log(`  Fetching: tl_name="${tlName}"`);
+  const query    = buildQuery(tlName);
+  const response = await grafanaRequest('POST', QUERY_URL, query);
+  const jobId    = response.data.jobReference.jobId;
+  const location = response.data.jobReference.location;
+  const resultUrl = `${QUERY_URL}/${jobId}?location=${location}`;
+  const result = await getQueryResults(resultUrl);
+  const rows   = processResults(result);
+  console.log(`    Rows found: ${rows.length}`);
+  return {
+    tl_name: tlName,
+    rows: rows,
+    total_rows: rows.length,
+    fetched_at: new Date().toISOString()
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| FETCH ALL
+|--------------------------------------------------------------------------
+*/
+async function fetchAllTeamLeaders() {
+  console.log(`\n>>> Fetching data for ${TEAM_LEADERS.length} Team Leaders...`);
+  const results = await Promise.all(
+    TEAM_LEADERS.map(async (tlName) => {
+      try {
+        return await fetchSingleTL(tlName);
+      } catch (err) {
+        console.error(`  Error fetching ${tlName}:`, err.message);
+        return {
+          tl_name: tlName,
+          error: err.message,
+          rows: [],
+          total_rows: 0,
+          fetched_at: new Date().toISOString()
+        };
+      }
+    })
+  );
+  console.log(`\nTotal: ${results.length} team leaders processed`);
+  return results;
+}
+
+/*
+|--------------------------------------------------------------------------
+| STAFF LOOKUP
+|--------------------------------------------------------------------------
+*/
+async function fetchStaffLookup() {
+  try {
+    const response = await axios.get(STAFF_SHEET_URL, { responseType: 'text' });
+    return response.data;
+  } catch (err) {
+    console.error('Staff lookup error:', err.message);
+    throw new Error('Failed to fetch staff sheet: ' + err.message);
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| PROJECT/TASK LOOKUP
+|--------------------------------------------------------------------------
+*/
 async function fetchProjectTaskLookup() {
   try {
     console.log("📊 Fetching project/task lookup data...");
@@ -29,13 +344,25 @@ async function fetchProjectTaskLookup() {
     });
     
     // Parse CSV to array of objects
-    const records = parse(response.data, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true
-    });
+    const lines = response.data.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length < 2) return [];
     
-    console.log(`✅ Loaded ${records.length} lookup records`);
+    const splitLine = (line: string) =>
+      line.split(',').map(cell => cell.trim().replace(/^"|"$/g, ''));
+    
+    const headers = splitLine(lines[0]).map(h => h.toLowerCase());
+    const records = [];
+    
+    for (let i = 1; i < lines.length; i++) {
+      const cells = splitLine(lines[i]);
+      const record = {};
+      headers.forEach((header, idx) => {
+        record[header] = cells[idx] || '';
+      });
+      records.push(record);
+    }
+    
+    console.log(`✅ Loaded ${records.length} project/task lookup records`);
     return records;
   } catch (err) {
     console.error("❌ Failed to fetch project/task lookup:", err.message);
@@ -43,256 +370,134 @@ async function fetchProjectTaskLookup() {
   }
 }
 
-/**
- * Get project/task lookup data with caching
- */
-async function getProjectTaskLookup(forceRefresh = false) {
-  const now = Date.now();
-  
-  // Check if cache is valid
-  if (!forceRefresh && 
-      lookupCache.data && 
-      lookupCache.timestamp && 
-      (now - lookupCache.timestamp) < lookupCache.cacheDuration) {
-    console.log("📦 Using cached lookup data");
-    return lookupCache.data;
-  }
-  
-  // Fetch fresh data
-  const data = await fetchProjectTaskLookup();
-  lookupCache.data = data;
-  lookupCache.timestamp = now;
-  return data;
-}
+/*
+|--------------------------------------------------------------------------
+| HTTP SERVER
+|--------------------------------------------------------------------------
+*/
+const server = http.createServer(async (req, res) => {
+  console.log(`${req.method} ${req.url}`);
 
-/**
- * Lookup project and task information based on staff_id and/or project_name
- * @param {string} staffId - The staff ID to lookup
- * @param {string} projectName - Optional project name to filter
- * @param {string} taskName - Optional task name to filter
- * @returns {Object} - Matching records with project and task details
- */
-async function lookupProjectTask(staffId, projectName = null, taskName = null) {
-  try {
-    const lookupData = await getProjectTaskLookup();
-    
-    // Normalize inputs
-    const normalizedStaffId = staffId?.trim().toLowerCase() || "";
-    const normalizedProject = projectName?.trim().toLowerCase() || "";
-    const normalizedTask = taskName?.trim().toLowerCase() || "";
-    
-    // Filter records
-    let results = lookupData.filter(record => {
-      const recordStaffId = (record.staff_id || record.staffId || "").trim().toLowerCase();
-      const recordProject = (record.project_name || record.projectName || "").trim().toLowerCase();
-      const recordTask = (record.task_name || record.taskName || "").trim().toLowerCase();
-      
-      // Check staff ID match
-      const staffMatch = normalizedStaffId ? recordStaffId.includes(normalizedStaffId) : true;
-      
-      // Check project name match if provided
-      const projectMatch = normalizedProject ? 
-        recordProject.includes(normalizedProject) : true;
-      
-      // Check task name match if provided
-      const taskMatch = normalizedTask ? 
-        recordTask.includes(normalizedTask) : true;
-      
-      return staffMatch && projectMatch && taskMatch;
+  // Set CORS headers for all responses
+  setCorsHeaders(res);
+
+  // Handle preflight OPTIONS request
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // Basic Auth check (skip for OPTIONS)
+  if (!authenticate(req)) {
+    console.log(`  ❌ Unauthorized: ${req.url}`);
+    res.writeHead(401, {
+      "WWW-Authenticate": 'Basic realm="QAT Server"',
+      "Content-Type": "application/json"
     });
-    
-    console.log(`🔍 Found ${results.length} matches for staff: ${staffId || 'all'}`);
-    return results;
-  } catch (err) {
-    console.error("❌ Lookup error:", err.message);
-    throw err;
+    res.end(JSON.stringify({ error: "Unauthorized" }));
+    return;
   }
-}
 
-/**
- * Get all projects associated with a specific staff ID
- */
-async function getProjectsForStaff(staffId) {
-  const results = await lookupProjectTask(staffId);
-  const projects = [...new Set(results.map(r => r.project_name || r.projectName))];
-  return projects;
-}
+  const parsed   = url.parse(req.url, true);
+  const pathname = parsed.pathname;
 
-/**
- * Get all tasks for a specific staff ID and project
- */
-async function getTasksForStaffProject(staffId, projectName) {
-  const results = await lookupProjectTask(staffId, projectName);
-  const tasks = [...new Set(results.map(r => r.task_name || r.taskName))];
-  return tasks;
-}
-
-/**
- * Validate if a staff ID exists in the lookup sheet
- */
-async function validateStaff(staffId) {
-  const results = await lookupProjectTask(staffId);
-  return results.length > 0;
-}
-
-/**
- * Get aggregated summary for a staff member
- */
-async function getStaffSummary(staffId) {
-  const results = await lookupProjectTask(staffId);
-  
-  const summary = {
-    staff_id: staffId,
-    total_projects: 0,
-    total_tasks: 0,
-    projects: {},
-    tasks: [],
-    records: results
-  };
-  
-  results.forEach(record => {
-    const project = record.project_name || record.projectName;
-    const task = record.task_name || record.taskName;
-    
-    if (project) {
-      if (!summary.projects[project]) {
-        summary.projects[project] = [];
-        summary.total_projects++;
-      }
-      if (task && !summary.projects[project].includes(task)) {
-        summary.projects[project].push(task);
-        summary.total_tasks++;
-      }
+  try {
+    if (pathname === "/" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", service: "QAT Server", time: new Date().toISOString() }));
+      return;
     }
-    
-    if (task && !summary.tasks.includes(task)) {
-      summary.tasks.push(task);
-    }
-  });
-  
-  return summary;
-}
 
-// Example usage in your HTTP server
-async function addLookupEndpoints(server) {
-  // Endpoint to get project/task lookup data
-  server.on('request', async (req, res) => {
-    const parsed = url.parse(req.url, true);
-    const pathname = parsed.pathname;
-    
-    // Add new endpoints
+    if (pathname === "/fetch-all" && req.method === "GET") {
+      const allData = await fetchAllTeamLeaders();
+      await saveToFirebase(allData);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        success: true,
+        data: allData,
+        total_leaders: allData.length,
+        updated_at: new Date().toISOString()
+      }));
+      return;
+    }
+
+    if (pathname === "/fetch" && req.method === "GET") {
+      const tlName = (parsed.query.tl_name || TEAM_LEADERS[0]).trim();
+      const data = await fetchSingleTL(tlName);
+      const payload = {
+        updated_at:    new Date().toISOString(),
+        total_rows:    data.total_rows,
+        filter_config: { tl_name: tlName },
+        data:          data.rows,
+      };
+      await axios.put(`${FIREBASE_URL}${FIREBASE_PATH}`, payload);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        success: true,
+        rows: data.rows,
+        total: data.total_rows,
+        tl_name: tlName,
+        updated_at: new Date().toISOString(),
+      }));
+      return;
+    }
+
+    if (pathname === "/staff-lookup" && req.method === "GET") {
+      const csv = await fetchStaffLookup();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ csv }));
+      return;
+    }
+
+    // New endpoint for project/task lookup
     if (pathname === "/project-task-lookup" && req.method === "GET") {
       try {
-        const staffId = parsed.query.staff_id || "";
-        const projectName = parsed.query.project_name || null;
-        const taskName = parsed.query.task_name || null;
-        
-        let data;
-        if (staffId) {
-          data = await lookupProjectTask(staffId, projectName, taskName);
-        } else {
-          data = await getProjectTaskLookup();
-        }
-        
+        const data = await fetchProjectTaskLookup();
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           success: true,
           data: data,
-          count: data.length,
-          filters: { staffId, projectName, taskName }
+          count: data.length
         }));
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ 
-          success: false, 
-          error: err.message 
-        }));
-      }
-      return;
-    }
-    
-    // Endpoint to get staff summary
-    if (pathname === "/staff-summary" && req.method === "GET") {
-      try {
-        const staffId = parsed.query.staff_id;
-        if (!staffId) {
-          throw new Error("staff_id parameter required");
-        }
-        
-        const summary = await getStaffSummary(staffId);
-        res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
-          success: true,
-          summary: summary
-        }));
-      } catch (err) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ 
-          success: false, 
-          error: err.message 
+          success: false,
+          error: err.message
         }));
       }
       return;
     }
-  });
-}
 
-// Example: Use the lookup with your existing fetchSingleTL function
-async function fetchSingleTLWithLookup(tlName) {
-  console.log(`  Fetching: tl_name="${tlName}"`);
-  const query = buildQuery(tlName);
-  const response = await grafanaRequest('POST', QUERY_URL, query);
-  const jobId = response.data.jobReference.jobId;
-  const location = response.data.jobReference.location;
-  const resultUrl = `${QUERY_URL}/${jobId}?location=${location}`;
-  const result = await getQueryResults(resultUrl);
-  const rows = processResults(result);
-  
-  console.log(`    Rows found: ${rows.length}`);
-  
-  // Enrich rows with lookup data
-  const enrichedRows = await Promise.all(rows.map(async (row) => {
-    try {
-      const lookupResults = await lookupProjectTask(
-        row.staff_id, 
-        row.project_name,
-        row.task_name
-      );
-      
-      // Add lookup data to the row
-      return {
-        ...row,
-        lookup_data: lookupResults,
-        has_lookup: lookupResults.length > 0
-      };
-    } catch (err) {
-      console.warn(`Lookup failed for staff ${row.staff_id}:`, err.message);
-      return {
-        ...row,
-        lookup_data: [],
-        has_lookup: false,
-        lookup_error: err.message
-      };
+    if (pathname === "/team-leaders" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        team_leaders: TEAM_LEADERS,
+        count: TEAM_LEADERS.length
+      }));
+      return;
     }
-  }));
-  
-  return {
-    tl_name: tlName,
-    rows: enrichedRows,
-    total_rows: enrichedRows.length,
-    fetched_at: new Date().toISOString()
-  };
-}
 
-// Install required package: npm install csv-parse
+    res.writeHead(404);
+    res.end(JSON.stringify({ error: "Not found" }));
+  } catch (error) {
+    console.error("❌ Server Error:", error.message);
+    console.error("  Stack:", error.stack);
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ 
+      error: error.message,
+      details: error.stack
+    }));
+  }
+});
 
-module.exports = {
-  fetchProjectTaskLookup,
-  getProjectTaskLookup,
-  lookupProjectTask,
-  getProjectsForStaff,
-  getTasksForStaffProject,
-  validateStaff,
-  getStaffSummary,
-  fetchSingleTLWithLookup
-};
+server.listen(PORT, HOST, () => {
+  console.log("================================");
+  console.log(`  QAT Server running on http://${HOST}:${PORT}`);
+  console.log(`  Basic Auth: ${AUTH_USER} / ${AUTH_PASS}`);
+  console.log("  Grafana credentials: hardcoded (auto-renewal enabled)");
+  console.log("  CORS enabled for all origins");
+  console.log("  Project/Task lookup endpoint: /project-task-lookup");
+  console.log("================================");
+});
