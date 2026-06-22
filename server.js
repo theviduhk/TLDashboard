@@ -13,11 +13,10 @@ const QUERY_URL =
 const FIREBASE_URL  = "https://qat-output-default-rtdb.firebaseio.com";
 const FIREBASE_PATH = "/TL Hourly.json";
 
-// Railway port config
 const PORT = process.env.PORT || 3000;
 const HOST = "0.0.0.0";
 
-// Team Leaders
+// Hardcoded Team Leaders
 const TEAM_LEADERS = [
   "G26658-OTL",
   "G25883-OTL",
@@ -25,12 +24,12 @@ const TEAM_LEADERS = [
   "G23179- Team Leader"
 ];
 
-// Staff lookup sheet (පැරණි)
+// Staff lookup sheet
 const STAFF_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vTcJSktGEdHycbjqLx-YD7-V1DUCH462h64XxaiuyKv9iK6n2FXgh6VAYvFEkS83DI76b2HJfppeuzd/pub?gid=1860286382&output=csv";
 
 // ══════════════════════════════════════════════════════════════════════
-// 🔽 🔽 🔽 DENOMINATOR SHEET URL (ඔබගේ URL එක මෙහි යොදන්න)
+// DENOMINATOR SHEET URL (ඔබගේ URL එක මෙහි යොදන්න)
 // ══════════════════════════════════════════════════════════════════════
 const DENOMINATOR_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vTcJSktGEdHycbjqLx-YD7-V1DUCH462h64XxaiuyKv9iK6n2FXgh6VAYvFEkS83DI76b2HJfppeuzd/pub?gid=822634964&output=csv";
@@ -38,7 +37,7 @@ const DENOMINATOR_SHEET_URL =
 
 /*
 |--------------------------------------------------------------------------
-| HARDCODED BASIC AUTH (frontend ආරක්ෂාව සඳහා)
+| BASIC AUTH
 |--------------------------------------------------------------------------
 */
 const AUTH_USER = "admin";
@@ -59,19 +58,16 @@ function authenticate(req) {
 
 /*
 |--------------------------------------------------------------------------
-| GRAFANA SESSION MANAGER (Auto-login & Retry)
+| GRAFANA SESSION MANAGER
 |--------------------------------------------------------------------------
 */
-
 let grafanaSession = null;
 let loginPromise = null;
 
 async function loginToGrafana() {
-  console.log("🔐 Logging into Grafana to get fresh session...");
-
+  console.log("🔐 Logging into Grafana...");
   const username = "gss.kurunegala@gssintl.biz";
   const password = "Gssk@2021";
-
   try {
     const response = await axios.post(
       "https://monitor-public.trax-cloud.com/login",
@@ -83,9 +79,6 @@ async function loginToGrafana() {
         timeout: 30000
       }
     );
-
-    console.log(`  Login response status: ${response.status}`);
-
     const setCookieHeader = response.headers['set-cookie'];
     if (setCookieHeader) {
       const cookieArray = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
@@ -93,19 +86,14 @@ async function loginToGrafana() {
         const match = cookie.match(/grafana_session=([^;]+)/);
         if (match) {
           grafanaSession = match[1];
-          console.log("✅ New Grafana session obtained successfully!");
+          console.log("✅ Grafana session obtained.");
           return grafanaSession;
         }
       }
     }
-
-    throw new Error("Login successful but grafana_session cookie not found in response.");
+    throw new Error("grafana_session cookie not found.");
   } catch (error) {
     console.error("❌ Grafana login failed:", error.message);
-    if (error.response) {
-      console.error("  Response status:", error.response.status);
-      console.error("  Response data:", error.response.data);
-    }
     throw new Error(`Grafana login failed: ${error.message}`);
   }
 }
@@ -113,9 +101,7 @@ async function loginToGrafana() {
 async function getGrafanaHeaders() {
   if (!grafanaSession) {
     if (!loginPromise) {
-      loginPromise = loginToGrafana().finally(() => {
-        loginPromise = null;
-      });
+      loginPromise = loginToGrafana().finally(() => { loginPromise = null; });
     }
     await loginPromise;
   }
@@ -130,15 +116,12 @@ async function grafanaRequest(method, url, data = null, retryCount = 0) {
     const headers = await getGrafanaHeaders();
     const config = { headers, timeout: 30000 };
     let response;
-    if (method === 'GET') {
-      response = await axios.get(url, config);
-    } else if (method === 'POST') {
-      response = await axios.post(url, data, config);
-    }
+    if (method === 'GET') response = await axios.get(url, config);
+    else if (method === 'POST') response = await axios.post(url, data, config);
     return response;
   } catch (error) {
     if (error.response && (error.response.status === 401 || error.response.status === 403) && retryCount < 2) {
-      console.warn("⚠️ Session expired or invalid. Refreshing Grafana session...");
+      console.warn("⚠️ Session expired. Refreshing...");
       grafanaSession = null;
       loginPromise = null;
       return grafanaRequest(method, url, data, retryCount + 1);
@@ -149,7 +132,7 @@ async function grafanaRequest(method, url, data = null, retryCount = 0) {
 
 /*
 |--------------------------------------------------------------------------
-| BIGQUERY — poll until job complete (with auto-session)
+| BIGQUERY HELPERS
 |--------------------------------------------------------------------------
 */
 async function getQueryResults(resultUrl) {
@@ -161,11 +144,6 @@ async function getQueryResults(resultUrl) {
   throw new Error("BigQuery job timeout");
 }
 
-/*
-|--------------------------------------------------------------------------
-| BUILD SQL
-|--------------------------------------------------------------------------
-*/
 function buildQuery(tlName) {
   return {
     query: `
@@ -196,11 +174,6 @@ function buildQuery(tlName) {
   };
 }
 
-/*
-|--------------------------------------------------------------------------
-| PROCESS ROWS (BigQuery ප්‍රතිඵල parse කරයි)
-|--------------------------------------------------------------------------
-*/
 function processResults(result) {
   if (!result.rows) return [];
   const fields = result.schema.fields.map(f => f.name);
@@ -225,27 +198,38 @@ function processResults(result) {
 
 /*
 |--------------------------------------------------------------------------
-| DENOMINATOR SHEET LOADER (withdeno map එක load කරයි)
+| DENOMINATOR SHEET LOADER (flexible, error-proof)
 |--------------------------------------------------------------------------
 */
 let denominatorMap = null;
 
 async function loadDenominatorMap() {
-  if (denominatorMap) return denominatorMap;
+  if (denominatorMap !== null) return denominatorMap;
   try {
-    const response = await axios.get(DENOMINATOR_SHEET_URL, { responseType: 'text' });
+    console.log("🔄 Loading denominator sheet from:", DENOMINATOR_SHEET_URL);
+    const response = await axios.get(DENOMINATOR_SHEET_URL, {
+      responseType: 'text',
+      timeout: 10000
+    });
     const csv = response.data;
     const lines = csv.split(/\r?\n/).filter(l => l.trim().length > 0);
-    if (lines.length < 2) throw new Error("Denominator sheet empty");
+    if (lines.length < 2) {
+      console.warn("⚠️ Denominator sheet empty. Using empty map.");
+      denominatorMap = {};
+      return denominatorMap;
+    }
 
     const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
-    // Project, Task, withdeno තීරු සොයන්න
-    const projIdx = headers.findIndex(h => /project/i.test(h));
-    const taskIdx = headers.findIndex(h => /task/i.test(h));
-    const denoIdx = headers.findIndex(h => /withdeno|denominator|value/i.test(h)); // ඔබගේ තීරු නම අනුව වෙනස් කරන්න
+    const projIdx = headers.findIndex(h => /project|project_name/i.test(h));
+    const taskIdx = headers.findIndex(h => /task|task_name/i.test(h));
+    const denoIdx = headers.findIndex(h => /withdeno|denominator|value/i.test(h));
+
+    console.log(`  Columns: Project=${projIdx}, Task=${taskIdx}, Deno=${denoIdx}`);
 
     if (projIdx === -1 || taskIdx === -1 || denoIdx === -1) {
-      throw new Error("Denominator sheet columns not found: need Project, Task, withdeno");
+      console.warn("⚠️ Required columns not found. Using empty map.");
+      denominatorMap = {};
+      return denominatorMap;
     }
 
     const map = {};
@@ -264,19 +248,20 @@ async function loadDenominatorMap() {
     return map;
   } catch (err) {
     console.error("❌ Failed to load denominator sheet:", err.message);
-    throw new Error("Denominator sheet loading failed");
+    denominatorMap = {};
+    return denominatorMap;
   }
 }
 
 /*
 |--------------------------------------------------------------------------
-| FETCH SINGLE TL (WD & WO ගණනය කරයි)
+| FETCH SINGLE TL (with withdeno & withoutdeno)
 |--------------------------------------------------------------------------
 */
 async function fetchSingleTL(tlName) {
   console.log(`  Fetching: tl_name="${tlName}"`);
 
-  // 1. BigQuery data ලබාගන්න
+  // 1. BigQuery data
   const query = buildQuery(tlName);
   const response = await grafanaRequest('POST', QUERY_URL, query);
   const jobId = response.data.jobReference.jobId;
@@ -286,10 +271,10 @@ async function fetchSingleTL(tlName) {
   const rows = processResults(result);
   console.log(`    BigQuery rows: ${rows.length}`);
 
-  // 2. Denominator map එක load කරන්න
-  const denoMap = await loadDenominatorMap();
+  // 2. Load denominator map (always returns an object)
+  let denoMap = await loadDenominatorMap();
 
-  // 3. පැය, project, task අනුව rows count එක ගණනය කරන්න
+  // 3. Count rows per hour per project/task
   const hourCounts = {};
   rows.forEach(row => {
     const key = `${row.timestamp}__${row.project_name}__${row.task_name}`;
@@ -297,10 +282,9 @@ async function fetchSingleTL(tlName) {
     hourCounts[key] += 1;
   });
 
-  // 4. එක් එක් row එකට WD සහ W/O එකතු කරන්න
-  //    W/O = පෙර පැයේ total value (එම staff එකට)
+  // 4. Calculate WD (withdeno) and WO (previous total) and also keep without deno
   const sortedRows = [...rows].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  const staffPrevValue = {}; // staff_id -> previous hour's total value
+  const staffPrevValue = {};
 
   const enhancedRows = sortedRows.map(row => {
     const hourKey = `${row.timestamp}__${row.project_name}__${row.task_name}`;
@@ -308,29 +292,32 @@ async function fetchSingleTL(tlName) {
     const denoKey = `${row.project_name}__${row.task_name}`;
     const deno = denoMap[denoKey] || 0;
 
-    // WD = deno * count (5:30 AM ට හිස් කිරීමට)
-    let wd = deno * count;
-    // "denata" (5:30 AM) සඳහා WD හිස් කිරීම:
+    // ---- withdeno = deno * count ----
+    let wd_withdeno = deno * count;
+    // 5:30 AM WD is empty (set to 0 to show as blank later)
     const date = new Date(row.timestamp);
     const hour = date.getHours();
     const minutes = date.getMinutes();
     if (hour === 5 && minutes === 30) {
-      wd = null; // හිස් ලෙස සලකන්න
+      wd_withdeno = 0;
     }
 
-    // W/O = පෙර පැයේ total value (staff_id අනුව)
+    // ---- withoutdeno = original value (sum) ----
+    const wd_withoutdeno = row.value;
+
+    // ---- WO = previous hour's total for this staff ----
     const staffId = row.staff_id;
     const prevTotal = staffPrevValue[staffId] || 0;
     const wo = prevTotal;
 
-    // වත්මන් පැයේ total value එක staffPrevValue එකට එකතු කරන්න (ඊළඟ පැය සඳහා)
-    const currentTotal = row.value;
-    staffPrevValue[staffId] = (staffPrevValue[staffId] || 0) + currentTotal;
+    // Update for next hour
+    staffPrevValue[staffId] = (staffPrevValue[staffId] || 0) + row.value;
 
     return {
       ...row,
-      wd: wd,          // WD අගය (හෝ null)
-      wo: wo,          // පෙර පැයේ total value
+      wd_withdeno: wd_withdeno,        // with denominator
+      wd_withoutdeno: wd_withoutdeno,  // without denominator (raw value)
+      wo: wo,                          // previous hour's total
     };
   });
 
@@ -344,7 +331,7 @@ async function fetchSingleTL(tlName) {
 
 /*
 |--------------------------------------------------------------------------
-| FETCH ALL TEAM LEADERS
+| FETCH ALL
 |--------------------------------------------------------------------------
 */
 async function fetchAllTeamLeaders() {
@@ -371,7 +358,7 @@ async function fetchAllTeamLeaders() {
 
 /*
 |--------------------------------------------------------------------------
-| FIREBASE
+| FIREBASE SAVE
 |--------------------------------------------------------------------------
 */
 async function saveToFirebase(allData) {
@@ -386,7 +373,7 @@ async function saveToFirebase(allData) {
 
 /*
 |--------------------------------------------------------------------------
-| STAFF LOOKUP (පැරණි)
+| STAFF LOOKUP
 |--------------------------------------------------------------------------
 */
 async function fetchStaffLookup() {
@@ -415,9 +402,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204); res.end(); return;
   }
 
-  // Basic Auth check
   if (!authenticate(req)) {
-    console.log(`  ❌ Unauthorized: ${req.url}`);
     res.writeHead(401, {
       "WWW-Authenticate": 'Basic realm="QAT Server"',
       "Content-Type": "application/json"
@@ -489,7 +474,6 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404); res.end("Not found");
   } catch (error) {
     console.error("❌ Server Error:", error.message);
-    console.error("  Stack:", error.stack);
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ 
       error: error.message,
@@ -502,7 +486,8 @@ server.listen(PORT, HOST, () => {
   console.log("================================");
   console.log(`  QAT Server running on http://${HOST}:${PORT}`);
   console.log(`  Basic Auth: ${AUTH_USER} / ${AUTH_PASS}`);
-  console.log("  Grafana credentials: hardcoded (auto-renewal enabled)");
-  console.log("  Denominator sheet loaded on first request");
+  console.log("  Grafana credentials: hardcoded (auto-renewal)");
+  console.log("  Denominator sheet loaded on first request (fallback to empty map)");
+  console.log("  Fields: wd_withdeno, wd_withoutdeno, wo");
   console.log("================================");
 });
