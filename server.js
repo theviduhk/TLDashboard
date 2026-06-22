@@ -396,6 +396,7 @@ async function fetchSingleTL(tlName) {
   const denominatorData = await getDenominatorData();
 
   // Enrich rows with denominator and calculate WD
+  // W/O will be calculated in frontend using the raw count
   rows = rows.map(row => {
     const denominator = lookupDenominator(
       row.project_name,
@@ -404,14 +405,16 @@ async function fetchSingleTL(tlName) {
       denominatorData
     );
     
-    // Calculate WD = value * denominator
+    // WD = value * denominator
     const wd = row.value * denominator;
     
     return {
       ...row,
       denominator: denominator,
       wd: wd,
-      wo: 0 // Will be calculated in frontend
+      // W/O will be calculated in frontend using the raw count (value)
+      // Not multiplied by denominator
+      count: row.value // Keep raw count for W/O calculation
     };
   });
 
