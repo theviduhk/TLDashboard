@@ -1,6 +1,6 @@
-const axios  = require("axios");
-const http   = require("http");
-const url    = require("url");
+const axios = require("axios");
+const http = require("http");
+const url = require("url");
 
 /*
 |--------------------------------------------------------------------------
@@ -10,7 +10,7 @@ const url    = require("url");
 const QUERY_URL =
   "https://monitor-public.trax-cloud.com/api/datasources/proxy/133/bigquery/v2/projects/trax-ortal-prod/queries";
 
-const FIREBASE_URL  = "https://qat-output-default-rtdb.firebaseio.com";
+const FIREBASE_URL = "https://qat-output-default-rtdb.firebaseio.com";
 const FIREBASE_PATH = "/TL Hourly.json";
 
 // Railway port config
@@ -31,7 +31,7 @@ const STAFF_SHEET_URL =
 
 // Project/Task lookup sheet
 const PROJECT_TASK_SHEET_URL = () =>
-    `https://docs.google.com/spreadsheets/d/e/2PACX-1vTcJSktGEdHycbjqLx-YD7-V1DUCH462h64XxaiuyKv9iK6n2FXgh6VAYvFEkS83DI76b2HJfppeuzd/pub?gid=822634964&output=csv&_=${Date.now()}`;
+  `https://docs.google.com/spreadsheets/d/e/2PACX-1vTcJSktGEdHycbjqLx-YD7-V1DUCH462h64XxaiuyKv9iK6n2FXgh6VAYvFEkS83DI76b2HJfppeuzd/pub?gid=822634964&output=csv&_=${Date.now()}`;
 
 /*
 |--------------------------------------------------------------------------
@@ -41,14 +41,17 @@ const PROJECT_TASK_SHEET_URL = () =>
 const AUTH_USER = "admin";
 const AUTH_PASS = "password123";
 
-// ─── CORS Headers ────────────────────────────────────────────────────────────
-
+/*
+|--------------------------------------------------------------------------
+| CORS HEADERS
+|--------------------------------------------------------------------------
+*/
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Accept",
   "Access-Control-Allow-Credentials": "true",
-  "Access-Control-Max-Age": "86400" // 24 hours
+  "Access-Control-Max-Age": "86400"
 };
 
 function setCorsHeaders(res) {
@@ -81,15 +84,12 @@ let loginPromise = null;
 
 /**
  * Grafana login කර නව session cookie එකක් ලබා ගනී
- * ⚠️ පහත ඔබගේ Grafana credentials hardcode කර ඇත
  */
 async function loginToGrafana() {
   console.log("🔐 Logging into Grafana to get fresh session...");
 
-  // ---------- HARDCODED GRAFANA CREDENTIALS (ඔබ සැපයූ) ----------
   const username = "gss.kurunegala@gssintl.biz";
   const password = "Gssk@2021";
-  // ----------------------------------------------------------------
 
   try {
     const response = await axios.post(
@@ -105,7 +105,6 @@ async function loginToGrafana() {
 
     console.log(`  Login response status: ${response.status}`);
 
-    // Set-Cookie header එකෙන් grafana_session එක උකහා ගනිමු
     const setCookieHeader = response.headers['set-cookie'];
     if (setCookieHeader) {
       const cookieArray = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
@@ -163,7 +162,6 @@ async function grafanaRequest(method, url, data = null, retryCount = 0) {
     }
     return response;
   } catch (error) {
-    // Unauthorized හෝ Forbidden ආවොත්, session එක reset කර නැවත login කර try කරමු
     if (error.response && (error.response.status === 401 || error.response.status === 403) && retryCount < 2) {
       console.warn("⚠️ Session expired or invalid. Refreshing Grafana session...");
       grafanaSession = null;
@@ -242,11 +240,11 @@ function processResults(result) {
       return staff !== "" && staff !== "auto_stitch";
     })
     .map(obj => ({
-      timestamp:    obj.timestamp    || "",
+      timestamp: obj.timestamp || "",
       project_name: obj.project_name || "",
-      task_name:    obj.task_name    || "",
-      staff_id:     obj.staff_id     || "",
-      value:        Number(obj.value || 0),
+      task_name: obj.task_name || "",
+      staff_id: obj.staff_id || "",
+      value: Number(obj.value || 0),
     }));
 }
 
@@ -257,9 +255,9 @@ function processResults(result) {
 */
 async function saveToFirebase(allData) {
   const payload = {
-    updated_at:    new Date().toISOString(),
+    updated_at: new Date().toISOString(),
     total_leaders: allData.length,
-    data:          allData
+    data: allData
   };
   await axios.put(`${FIREBASE_URL}${FIREBASE_PATH}`, payload);
   console.log(`  Firebase updated: ${allData.length} team leaders data`);
@@ -272,13 +270,13 @@ async function saveToFirebase(allData) {
 */
 async function fetchSingleTL(tlName) {
   console.log(`  Fetching: tl_name="${tlName}"`);
-  const query    = buildQuery(tlName);
+  const query = buildQuery(tlName);
   const response = await grafanaRequest('POST', QUERY_URL, query);
-  const jobId    = response.data.jobReference.jobId;
+  const jobId = response.data.jobReference.jobId;
   const location = response.data.jobReference.location;
   const resultUrl = `${QUERY_URL}/${jobId}?location=${location}`;
   const result = await getQueryResults(resultUrl);
-  const rows   = processResults(result);
+  const rows = processResults(result);
   console.log(`    Rows found: ${rows.length}`);
   return {
     tl_name: tlName,
@@ -342,17 +340,16 @@ async function fetchProjectTaskLookup() {
       responseType: 'text',
       timeout: 30000
     });
-    
-    // Parse CSV to array of objects
+
     const lines = response.data.split(/\r?\n/).filter(l => l.trim().length > 0);
     if (lines.length < 2) return [];
-    
-    const splitLine = (line: string) =>
+
+    const splitLine = (line) =>
       line.split(',').map(cell => cell.trim().replace(/^"|"$/g, ''));
-    
+
     const headers = splitLine(lines[0]).map(h => h.toLowerCase());
     const records = [];
-    
+
     for (let i = 1; i < lines.length; i++) {
       const cells = splitLine(lines[i]);
       const record = {};
@@ -361,7 +358,7 @@ async function fetchProjectTaskLookup() {
       });
       records.push(record);
     }
-    
+
     console.log(`✅ Loaded ${records.length} project/task lookup records`);
     return records;
   } catch (err) {
@@ -372,16 +369,16 @@ async function fetchProjectTaskLookup() {
 
 /*
 |--------------------------------------------------------------------------
-| HTTP SERVER
+| HTTP SERVER WITH CORS
 |--------------------------------------------------------------------------
 */
 const server = http.createServer(async (req, res) => {
   console.log(`${req.method} ${req.url}`);
 
-  // Set CORS headers for all responses
+  // Set CORS headers for ALL responses
   setCorsHeaders(res);
 
-  // Handle preflight OPTIONS request
+  // Handle preflight OPTIONS request immediately
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
@@ -399,16 +396,23 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const parsed   = url.parse(req.url, true);
+  const parsed = url.parse(req.url, true);
   const pathname = parsed.pathname;
 
   try {
+    // Health check
     if (pathname === "/" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", service: "QAT Server", time: new Date().toISOString() }));
+      res.end(JSON.stringify({
+        status: "ok",
+        service: "QAT Server",
+        time: new Date().toISOString(),
+        cors: "enabled"
+      }));
       return;
     }
 
+    // Fetch all team leaders
     if (pathname === "/fetch-all" && req.method === "GET") {
       const allData = await fetchAllTeamLeaders();
       await saveToFirebase(allData);
@@ -422,14 +426,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Fetch single team leader
     if (pathname === "/fetch" && req.method === "GET") {
       const tlName = (parsed.query.tl_name || TEAM_LEADERS[0]).trim();
       const data = await fetchSingleTL(tlName);
       const payload = {
-        updated_at:    new Date().toISOString(),
-        total_rows:    data.total_rows,
+        updated_at: new Date().toISOString(),
+        total_rows: data.total_rows,
         filter_config: { tl_name: tlName },
-        data:          data.rows,
+        data: data.rows,
       };
       await axios.put(`${FIREBASE_URL}${FIREBASE_PATH}`, payload);
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -443,6 +448,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Staff lookup
     if (pathname === "/staff-lookup" && req.method === "GET") {
       const csv = await fetchStaffLookup();
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -450,7 +456,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // New endpoint for project/task lookup
+    // Project/Task lookup
     if (pathname === "/project-task-lookup" && req.method === "GET") {
       try {
         const data = await fetchProjectTaskLookup();
@@ -470,6 +476,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Team leaders list
     if (pathname === "/team-leaders" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
@@ -479,25 +486,32 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    res.writeHead(404);
+    // 404
+    res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Not found" }));
   } catch (error) {
     console.error("❌ Server Error:", error.message);
     console.error("  Stack:", error.stack);
     res.writeHead(500, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ 
+    res.end(JSON.stringify({
       error: error.message,
       details: error.stack
     }));
   }
 });
 
+// Start server
 server.listen(PORT, HOST, () => {
   console.log("================================");
-  console.log(`  QAT Server running on http://${HOST}:${PORT}`);
-  console.log(`  Basic Auth: ${AUTH_USER} / ${AUTH_PASS}`);
-  console.log("  Grafana credentials: hardcoded (auto-renewal enabled)");
-  console.log("  CORS enabled for all origins");
-  console.log("  Project/Task lookup endpoint: /project-task-lookup");
+  console.log(`  🚀 QAT Server running on http://${HOST}:${PORT}`);
+  console.log(`  🔐 Basic Auth: ${AUTH_USER} / ${AUTH_PASS}`);
+  console.log(`  🌐 CORS: Enabled for all origins`);
+  console.log(`  📊 Endpoints:`);
+  console.log(`    GET  /                  - Health check`);
+  console.log(`    GET  /fetch-all         - Fetch all team leaders`);
+  console.log(`    GET  /fetch?tl_name=    - Fetch single team leader`);
+  console.log(`    GET  /staff-lookup      - Staff name lookup`);
+  console.log(`    GET  /project-task-lookup - Project/Task lookup`);
+  console.log(`    GET  /team-leaders      - List of team leaders`);
   console.log("================================");
 });
