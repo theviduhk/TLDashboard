@@ -33,9 +33,13 @@ const STAFF_SHEET_URL =
 const PROJECT_TASK_SHEET_URL = () =>
   `https://docs.google.com/spreadsheets/d/e/2PACX-1vTcJSktGEdHycbjqLx-YD7-V1DUCH462h64XxaiuyKv9iK6n2FXgh6VAYvFEkS83DI76b2HJfppeuzd/pub?gid=822634964&output=csv&_=${Date.now()}`;
 
+// Denominator Sheet URL
+const DENOMINATOR_SHEET_URL = () =>
+  `https://docs.google.com/spreadsheets/d/e/2PACX-1vTcJSktGEdHycbjqLx-YD7-V1DUCH462h64XxaiuyKv9iK6n2FXgh6VAYvFEkS83DI76b2HJfppeuzd/pub?gid=0&output=csv&_=${Date.now()}`;
+
 /*
 |--------------------------------------------------------------------------
-| HARDCODED BASIC AUTH (frontend ආරක්ෂාව සඳහා)
+| HARDCODED BASIC AUTH
 |--------------------------------------------------------------------------
 */
 const AUTH_USER = "admin";
@@ -75,16 +79,13 @@ function authenticate(req) {
 
 /*
 |--------------------------------------------------------------------------
-| GRAFANA SESSION MANAGER (Auto-login & Retry)
+| GRAFANA SESSION MANAGER
 |--------------------------------------------------------------------------
 */
 
 let grafanaSession = null;
 let loginPromise = null;
 
-/**
- * Grafana login කර නව session cookie එකක් ලබා ගනී
- */
 async function loginToGrafana() {
   console.log("🔐 Logging into Grafana to get fresh session...");
 
@@ -129,9 +130,6 @@ async function loginToGrafana() {
   }
 }
 
-/**
- * Current headers ලබා ගනී. session එක null නම් auto-login වේ.
- */
 async function getGrafanaHeaders() {
   if (!grafanaSession) {
     if (!loginPromise) {
@@ -147,9 +145,6 @@ async function getGrafanaHeaders() {
   };
 }
 
-/**
- * Grafana request එකක් execute කරයි. 401/403 error එකක් ආවොත් session එක refresh කර නැවත try කරයි.
- */
 async function grafanaRequest(method, url, data = null, retryCount = 0) {
   try {
     const headers = await getGrafanaHeaders();
@@ -174,7 +169,7 @@ async function grafanaRequest(method, url, data = null, retryCount = 0) {
 
 /*
 |--------------------------------------------------------------------------
-| BIGQUERY — poll until job complete (with auto-session)
+| BIGQUERY
 |--------------------------------------------------------------------------
 */
 async function getQueryResults(resultUrl) {
@@ -265,7 +260,124 @@ async function saveToFirebase(allData) {
 
 /*
 |--------------------------------------------------------------------------
-| FETCH SINGLE TL
+| DENOMINATOR LOOKUP
+|--------------------------------------------------------------------------
+*/
+// Cache for denominator data
+let denominatorCache = {
+  data: null,
+  byProjectTask: {},
+  byGID: {},
+  timestamp: null,
+  cacheDuration: 5 * 60 * 1000 // 5 minutes
+};
+
+async function fetchDenominatorSheet() {
+  try {
+    console.log("📊 Fetching denominator sheet...");
+    const response = await axios.get(DENOMINATOR_SHEET_URL(), {
+      responseType: 'text',
+      timeout: 30000
+    });
+
+    const lines = response.data.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length < 2) return {};
+
+    const splitLine = (line) =>
+      line.split(',').map(cell => cell.trim().replace(/^"|"$/g, ''));
+
+    const headers = splitLine(lines[0]).map(h => h.toLowerCase());
+    
+    // Find column indices
+    const projectIdx = headers.findIndex(h => h.includes('project'));
+    const taskIdx = headers.findIndex(h => h.includes('task'));
+    const gidIdx = headers.findIndex(h => h.includes('gid') || h.includes('staff_id'));
+    const denominatorIdx = headers.findIndex(h => h.includes('denominator') || h.includes('denom'));
+    
+    const denominatorMap = {
+      byProjectTask: {},
+      byGID: {}
+    };
+
+    for (let i = 1; i < lines.length; i++) {
+      const cells = splitLine(lines[i]);
+      const project = cells[projectIdx] || '';
+      const task = cells[taskIdx] || '';
+      const gid = cells[gidIdx] || '';
+      const denominator = parseFloat(cells[denominatorIdx]) || 1;
+
+      // Store by Project + Task combination
+      const key = `${project}__${task}`;
+      if (project && task) {
+        denominatorMap.byProjectTask[key] = denominator;
+      }
+
+      // Store by GID
+      if (gid) {
+        denominatorMap.byGID[gid] = denominator;
+      }
+    }
+
+    console.log(`✅ Loaded ${Object.keys(denominatorMap.byProjectTask).length} project/task denominators`);
+    console.log(`✅ Loaded ${Object.keys(denominatorMap.byGID).length} GID denominators`);
+    
+    return denominatorMap;
+  } catch (err) {
+    console.error("❌ Failed to fetch denominator sheet:", err.message);
+    return { byProjectTask: {}, byGID: {} };
+  }
+}
+
+async function getDenominatorData(forceRefresh = false) {
+  const now = Date.now();
+  
+  if (!forceRefresh && 
+      denominatorCache.data && 
+      denominatorCache.timestamp && 
+      (now - denominatorCache.timestamp) < denominatorCache.cacheDuration) {
+    return denominatorCache.data;
+  }
+  
+  const data = await fetchDenominatorSheet();
+  denominatorCache.data = data;
+  denominatorCache.timestamp = now;
+  return data;
+}
+
+function lookupDenominator(project, task, gid, denominatorData) {
+  // Default value based on task type
+  let defaultValue = 1;
+  
+  // Special cases
+  const taskLower = (task || "").toLowerCase().trim();
+  if (['stitching', 'stitching_edit'].includes(taskLower)) {
+    return 0;
+  }
+  if (['offline_posm', 'scene_recognition'].includes(taskLower)) {
+    defaultValue = 0.5;
+  }
+  if (taskLower === 'validation_warm_up') {
+    defaultValue = 0.35;
+  }
+
+  // First try by GID
+  if (gid && denominatorData.byGID[gid]) {
+    return denominatorData.byGID[gid];
+  }
+
+  // Then try by Project + Task
+  const key = `${project}__${task}`;
+  if (project && task && denominatorData.byProjectTask[key]) {
+    return denominatorData.byProjectTask[key];
+  }
+
+  // Return default value
+  return defaultValue;
+}
+
+/*
+|--------------------------------------------------------------------------
+| FETCH SINGLE TL with Denominator
 |--------------------------------------------------------------------------
 */
 async function fetchSingleTL(tlName) {
@@ -276,8 +388,33 @@ async function fetchSingleTL(tlName) {
   const location = response.data.jobReference.location;
   const resultUrl = `${QUERY_URL}/${jobId}?location=${location}`;
   const result = await getQueryResults(resultUrl);
-  const rows = processResults(result);
+  let rows = processResults(result);
+  
   console.log(`    Rows found: ${rows.length}`);
+
+  // Get denominator data
+  const denominatorData = await getDenominatorData();
+
+  // Enrich rows with denominator and calculate WD
+  rows = rows.map(row => {
+    const denominator = lookupDenominator(
+      row.project_name,
+      row.task_name,
+      row.staff_id,
+      denominatorData
+    );
+    
+    // Calculate WD = value * denominator
+    const wd = row.value * denominator;
+    
+    return {
+      ...row,
+      denominator: denominator,
+      wd: wd,
+      wo: 0 // Will be calculated in frontend
+    };
+  });
+
   return {
     tl_name: tlName,
     rows: rows,
@@ -385,7 +522,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Basic Auth check (skip for OPTIONS)
+  // Basic Auth check
   if (!authenticate(req)) {
     console.log(`  ❌ Unauthorized: ${req.url}`);
     res.writeHead(401, {
@@ -476,6 +613,29 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Denominator lookup
+    if (pathname === "/denominator-lookup" && req.method === "GET") {
+      try {
+        const data = await getDenominatorData(true);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          success: true,
+          data: data,
+          count: {
+            byProjectTask: Object.keys(data.byProjectTask).length,
+            byGID: Object.keys(data.byGID).length
+          }
+        }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          success: false,
+          error: err.message
+        }));
+      }
+      return;
+    }
+
     // Team leaders list
     if (pathname === "/team-leaders" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -507,11 +667,12 @@ server.listen(PORT, HOST, () => {
   console.log(`  🔐 Basic Auth: ${AUTH_USER} / ${AUTH_PASS}`);
   console.log(`  🌐 CORS: Enabled for all origins`);
   console.log(`  📊 Endpoints:`);
-  console.log(`    GET  /                  - Health check`);
-  console.log(`    GET  /fetch-all         - Fetch all team leaders`);
-  console.log(`    GET  /fetch?tl_name=    - Fetch single team leader`);
-  console.log(`    GET  /staff-lookup      - Staff name lookup`);
-  console.log(`    GET  /project-task-lookup - Project/Task lookup`);
-  console.log(`    GET  /team-leaders      - List of team leaders`);
+  console.log(`    GET  /                        - Health check`);
+  console.log(`    GET  /fetch-all               - Fetch all team leaders`);
+  console.log(`    GET  /fetch?tl_name=          - Fetch single team leader`);
+  console.log(`    GET  /staff-lookup            - Staff name lookup`);
+  console.log(`    GET  /project-task-lookup     - Project/Task lookup`);
+  console.log(`    GET  /denominator-lookup      - Denominator lookup`);
+  console.log(`    GET  /team-leaders            - List of team leaders`);
   console.log("================================");
 });
