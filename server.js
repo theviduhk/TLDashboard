@@ -261,13 +261,16 @@ async function saveToFirebase(allData) {
 /*
 |--------------------------------------------------------------------------
 | DENOMINATOR LOOKUP
+| FIX: Keys are stored NORMALIZED (lowercase + trimmed) so frontend
+|      lookups always match regardless of casing differences.
 |--------------------------------------------------------------------------
 */
+// Normalize helper - matches frontend norm()
+const normKey = (s) => (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
+
 // Cache for denominator data
 let denominatorCache = {
   data: null,
-  byProjectTask: {},
-  byGID: {},
   timestamp: null,
   cacheDuration: 5 * 60 * 1000 // 5 minutes
 };
@@ -281,98 +284,127 @@ async function fetchDenominatorSheet() {
     });
 
     const lines = response.data.split(/\r?\n/).filter(l => l.trim().length > 0);
-    if (lines.length < 2) return {};
+    if (lines.length < 2) return { byProjectTask: {}, byGID: {}, rows: [] };
 
     const splitLine = (line) =>
       line.split(',').map(cell => cell.trim().replace(/^"|"$/g, ''));
 
     const headers = splitLine(lines[0]).map(h => h.toLowerCase());
-    
+
     // Find column indices
-    const projectIdx = headers.findIndex(h => h.includes('project'));
-    const taskIdx = headers.findIndex(h => h.includes('task'));
-    const gidIdx = headers.findIndex(h => h.includes('gid') || h.includes('staff_id'));
-    const denominatorIdx = headers.findIndex(h => h.includes('denominator') || h.includes('denom'));
-    
+    const projectIdx    = headers.findIndex(h => h.includes('project'));
+    const taskIdx       = headers.findIndex(h => h.includes('task'));
+    const gidIdx        = headers.findIndex(h => h.includes('gid') || (h.includes('staff') && h.includes('id')));
+    const denominatorIdx= headers.findIndex(h => h.includes('denominator') || h.includes('denom'));
+
     const denominatorMap = {
-      byProjectTask: {},
-      byGID: {}
+      byProjectTask: {}, // NORMALIZED keys: "norm_project||norm_task"
+      byGID: {},
+      rows: []           // raw rows for debugging
     };
 
     for (let i = 1; i < lines.length; i++) {
       const cells = splitLine(lines[i]);
-      const project = cells[projectIdx] || '';
-      const task = cells[taskIdx] || '';
-      const gid = cells[gidIdx] || '';
-      const denominator = parseFloat(cells[denominatorIdx]) || 1;
+      const project     = cells[projectIdx]     || '';
+      const task        = cells[taskIdx]        || '';
+      const gid         = cells[gidIdx]         || '';
+      const denominator = parseFloat(cells[denominatorIdx]);
 
-      // Store by Project + Task combination
-      const key = `${project}__${task}`;
-      if (project && task) {
+      // Skip rows with no meaningful data
+      if (!task && !gid) continue;
+      // Skip rows where denominator is not a valid number
+      if (isNaN(denominator)) continue;
+
+      // FIX: Store with NORMALIZED keys (lowercase + trimmed)
+      if (project || task) {
+        const normProject = normKey(project);
+        const normTask    = normKey(task);
+        const key = `${normProject}||${normTask}`;
         denominatorMap.byProjectTask[key] = denominator;
+        console.log(`  [sheet] "${key}" = ${denominator}`);
       }
 
-      // Store by GID
       if (gid) {
-        denominatorMap.byGID[gid] = denominator;
+        denominatorMap.byGID[normKey(gid)] = denominator;
       }
+
+      // Keep raw rows for debug endpoint
+      denominatorMap.rows.push({ project, task, gid, denominator });
     }
 
     console.log(`✅ Loaded ${Object.keys(denominatorMap.byProjectTask).length} project/task denominators`);
     console.log(`✅ Loaded ${Object.keys(denominatorMap.byGID).length} GID denominators`);
-    
+
     return denominatorMap;
   } catch (err) {
     console.error("❌ Failed to fetch denominator sheet:", err.message);
-    return { byProjectTask: {}, byGID: {} };
+    return { byProjectTask: {}, byGID: {}, rows: [] };
   }
 }
 
 async function getDenominatorData(forceRefresh = false) {
   const now = Date.now();
-  
-  if (!forceRefresh && 
-      denominatorCache.data && 
-      denominatorCache.timestamp && 
+  if (!forceRefresh &&
+      denominatorCache.data &&
+      denominatorCache.timestamp &&
       (now - denominatorCache.timestamp) < denominatorCache.cacheDuration) {
     return denominatorCache.data;
   }
-  
   const data = await fetchDenominatorSheet();
   denominatorCache.data = data;
   denominatorCache.timestamp = now;
   return data;
 }
 
+/*
+|--------------------------------------------------------------------------
+| DENOMINATOR LOOKUP (server-side, for enriching rows)
+| Priority:
+|   1. Special task rules (stitching=0, offline_posm=0.5, etc.)
+|   2. Sheet byGID match
+|   3. Sheet byProjectTask match (normalized keys)
+|   4. Task-only match (empty project key)
+|   5. Default = 1
+|--------------------------------------------------------------------------
+*/
 function lookupDenominator(project, task, gid, denominatorData) {
-  // Default value based on task type
-  let defaultValue = 1;
-  
-  // Special cases
-  const taskLower = (task || "").toLowerCase().trim();
-  if (['stitching', 'stitching_edit'].includes(taskLower)) {
-    return 0;
+  const normTask    = normKey(task);
+  const normProject = normKey(project);
+  const normGid     = normKey(gid);
+
+  // 1. Special hardcoded task rules (always override sheet)
+  if (['stitching', 'stitching_edit'].includes(normTask)) return 0;
+  if (['offline_posm', 'scene_recognition'].includes(normTask)) {
+    // Still check sheet first in case they want to override
+    const sheetVal = denominatorData.byProjectTask[`${normProject}||${normTask}`]
+                  ?? denominatorData.byProjectTask[`||${normTask}`];
+    return sheetVal !== undefined ? sheetVal : 0.5;
   }
-  if (['offline_posm', 'scene_recognition'].includes(taskLower)) {
-    defaultValue = 0.5;
-  }
-  if (taskLower === 'validation_warm_up') {
-    defaultValue = 0.35;
+  if (normTask === 'validation_warm_up') {
+    const sheetVal = denominatorData.byProjectTask[`${normProject}||${normTask}`]
+                  ?? denominatorData.byProjectTask[`||${normTask}`];
+    return sheetVal !== undefined ? sheetVal : 0.35;
   }
 
-  // First try by GID
-  if (gid && denominatorData.byGID[gid]) {
-    return denominatorData.byGID[gid];
+  // 2. GID match (normalized)
+  if (normGid && denominatorData.byGID[normGid] !== undefined) {
+    return denominatorData.byGID[normGid];
   }
 
-  // Then try by Project + Task
-  const key = `${project}__${task}`;
-  if (project && task && denominatorData.byProjectTask[key]) {
-    return denominatorData.byProjectTask[key];
+  // 3. Exact project + task match (normalized)
+  const exactKey = `${normProject}||${normTask}`;
+  if (denominatorData.byProjectTask[exactKey] !== undefined) {
+    return denominatorData.byProjectTask[exactKey];
   }
 
-  // Return default value
-  return defaultValue;
+  // 4. Task-only match (project stored as empty string in sheet)
+  const taskOnlyKey = `||${normTask}`;
+  if (denominatorData.byProjectTask[taskOnlyKey] !== undefined) {
+    return denominatorData.byProjectTask[taskOnlyKey];
+  }
+
+  // 5. Default
+  return 1;
 }
 
 /*
@@ -389,14 +421,13 @@ async function fetchSingleTL(tlName) {
   const resultUrl = `${QUERY_URL}/${jobId}?location=${location}`;
   const result = await getQueryResults(resultUrl);
   let rows = processResults(result);
-  
+
   console.log(`    Rows found: ${rows.length}`);
 
   // Get denominator data
   const denominatorData = await getDenominatorData();
 
   // Enrich rows with denominator and calculate WD
-  // W/O will be calculated in frontend using the raw count
   rows = rows.map(row => {
     const denominator = lookupDenominator(
       row.project_name,
@@ -404,17 +435,14 @@ async function fetchSingleTL(tlName) {
       row.staff_id,
       denominatorData
     );
-    
-    // WD = value * denominator
+
     const wd = row.value * denominator;
-    
+
     return {
       ...row,
       denominator: denominator,
       wd: wd,
-      // W/O will be calculated in frontend using the raw count (value)
-      // Not multiplied by denominator
-      count: row.value // Keep raw count for W/O calculation
+      count: row.value
     };
   });
 
@@ -608,10 +636,7 @@ const server = http.createServer(async (req, res) => {
         }));
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({
-          success: false,
-          error: err.message
-        }));
+        res.end(JSON.stringify({ success: false, error: err.message }));
       }
       return;
     }
@@ -619,7 +644,7 @@ const server = http.createServer(async (req, res) => {
     // Denominator lookup
     if (pathname === "/denominator-lookup" && req.method === "GET") {
       try {
-        const data = await getDenominatorData(true);
+        const data = await getDenominatorData(true); // force refresh
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           success: true,
@@ -631,10 +656,7 @@ const server = http.createServer(async (req, res) => {
         }));
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({
-          success: false,
-          error: err.message
-        }));
+        res.end(JSON.stringify({ success: false, error: err.message }));
       }
       return;
     }
