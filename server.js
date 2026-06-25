@@ -339,39 +339,53 @@ async function getDenominatorData(forceRefresh = false) {
 
 /*
 |--------------------------------------------------------------------------
-| DENOMINATOR LOOKUP (server-side, for enriching rows)
-| 100% from Google Sheet — NO hardcoded values.
+| TASK FALLBACK GROUPS
+| Used when sheet cell is empty / "-" / project not in sheet.
+|   Group A (0.35): posm/stitching/scene/validation_warm_up tasks
+|   Group B (1):    standard masking/voting/validation tasks
+|   Otherwise:      0
+|--------------------------------------------------------------------------
+*/
+const TASK_FALLBACK_035 = new Set([
+  'offline_posm', 'posm_masking', 'posm_voting',
+  'stitching', 'stitching_edit',
+  'scene_recognition', 'scene_recognition_edit',
+  'validation_warm_up'
+]);
+
+const TASK_FALLBACK_1 = new Set([
+  'category_expert', 'voting_engine', 'masking', 'masking_engine',
+  'masking_menu_items', 'masking_price_labels', 'offline_pricing',
+  'pricing_voting', 'special_masking', 'validation', 'validation_edit',
+  'offline_validation', 'voting', 'offline_voting'
+]);
+
+function taskFallback(normTask) {
+  if (TASK_FALLBACK_035.has(normTask)) return 0.35;
+  if (TASK_FALLBACK_1.has(normTask))   return 1;
+  return 0;
+}
+
+/*
+|--------------------------------------------------------------------------
+| DENOMINATOR LOOKUP
 | Priority:
-|   1. Exact project + task match (normalized)
-|   2. Task-only match (project stored as empty string in sheet)
-|   3. GID match
-|   4. Not found → denominator = 0 (WD = 0, row excluded from WD total)
+|   1. Sheet exact match (project + task) → sheet value
+|   2. Sheet missing / "-" / empty → taskFallback(task)
 |--------------------------------------------------------------------------
 */
 function lookupDenominator(project, task, gid, denominatorData) {
   const normTask    = normKey(task);
   const normProject = normKey(project);
-  const normGid     = normKey(gid);
 
-  // 1. Exact project + task match (normalized)
+  // 1. Sheet exact match
   const exactKey = `${normProject}||${normTask}`;
   if (denominatorData.byProjectTask[exactKey] !== undefined) {
     return denominatorData.byProjectTask[exactKey];
   }
 
-  // 2. Task-only match (project column is empty in sheet)
-  const taskOnlyKey = `||${normTask}`;
-  if (denominatorData.byProjectTask[taskOnlyKey] !== undefined) {
-    return denominatorData.byProjectTask[taskOnlyKey];
-  }
-
-  // 3. GID match
-  if (normGid && denominatorData.byGID[normGid] !== undefined) {
-    return denominatorData.byGID[normGid];
-  }
-
-  // 4. Not in sheet → 0
-  return 0;
+  // 2. Not in sheet (project missing or cell was "-"/empty) → fallback by task
+  return taskFallback(normTask);
 }
 
 /*
