@@ -275,63 +275,46 @@ let denominatorCache = {
 
 async function fetchDenominatorSheet() {
   try {
-    console.log("📊 Fetching denominator sheet...");
+    console.log("📊 Fetching project/task denominator matrix...");
     const response = await axios.get(PROJECT_TASK_SHEET_URL(), {
       responseType: 'text',
       timeout: 30000
     });
 
+    // Sheet is a MATRIX:
+    //   Row 0     : col[0]="Project", col[1..N] = task names
+    //   Row 1..M  : col[0]=project name, col[1..N] = denominator or "-"/empty
     const lines = response.data.split(/\r?\n/).filter(l => l.trim().length > 0);
     if (lines.length < 2) return { byProjectTask: {}, byGID: {}, rows: [] };
 
     const splitLine = (line) =>
       line.split(',').map(cell => cell.trim().replace(/^"|"$/g, ''));
 
-    const headers = splitLine(lines[0]).map(h => h.toLowerCase());
+    const headerCells = splitLine(lines[0]);
+    const taskNames = headerCells.slice(1).map(h => normKey(h));
 
-    // Find column indices
-    const projectIdx    = headers.findIndex(h => h.includes('project'));
-    const taskIdx       = headers.findIndex(h => h.includes('task'));
-    const gidIdx        = headers.findIndex(h => h.includes('gid') || (h.includes('staff') && h.includes('id')));
-    const denominatorIdx= headers.findIndex(h => h.includes('denominator') || h.includes('denom'));
-
-    const denominatorMap = {
-      byProjectTask: {}, // NORMALIZED keys: "norm_project||norm_task"
-      byGID: {},
-      rows: []           // raw rows for debugging
-    };
+    const denominatorMap = { byProjectTask: {}, byGID: {}, rows: [] };
 
     for (let i = 1; i < lines.length; i++) {
       const cells = splitLine(lines[i]);
-      const project     = cells[projectIdx]     || '';
-      const task        = cells[taskIdx]        || '';
-      const gid         = cells[gidIdx]         || '';
-      const denominator = parseFloat(cells[denominatorIdx]);
+      const project = normKey(cells[0] || '');
+      if (!project) continue;
 
-      // Skip rows with no meaningful data
-      if (!task && !gid) continue;
-      // Skip rows where denominator is not a valid number
-      if (isNaN(denominator)) continue;
-
-      // FIX: Store with NORMALIZED keys (lowercase + trimmed)
-      if (project || task) {
-        const normProject = normKey(project);
-        const normTask    = normKey(task);
-        const key = `${normProject}||${normTask}`;
+      for (let j = 1; j < cells.length; j++) {
+        const taskName = taskNames[j - 1];
+        if (!taskName) continue;
+        const raw = (cells[j] || '').trim();
+        if (!raw || raw === '-') continue;
+        const denominator = parseFloat(raw);
+        if (isNaN(denominator)) continue;
+        const key = `${project}||${taskName}`;
         denominatorMap.byProjectTask[key] = denominator;
-        console.log(`  [sheet] "${key}" = ${denominator}`);
+        denominatorMap.rows.push({ project, task: taskName, denominator });
+        console.log(`  [matrix] "${key}" = ${denominator}`);
       }
-
-      if (gid) {
-        denominatorMap.byGID[normKey(gid)] = denominator;
-      }
-
-      // Keep raw rows for debug endpoint
-      denominatorMap.rows.push({ project, task, gid, denominator });
     }
 
-    console.log(`✅ Loaded ${Object.keys(denominatorMap.byProjectTask).length} project/task denominators`);
-    console.log(`✅ Loaded ${Object.keys(denominatorMap.byGID).length} GID denominators`);
+    console.log(`✅ Loaded ${Object.keys(denominatorMap.byProjectTask).length} project/task denominators from matrix`);
 
     return denominatorMap;
   } catch (err) {
