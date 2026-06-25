@@ -33,9 +33,7 @@ const STAFF_SHEET_URL =
 const PROJECT_TASK_SHEET_URL = () =>
   `https://docs.google.com/spreadsheets/d/e/2PACX-1vTcJSktGEdHycbjqLx-YD7-V1DUCH462h64XxaiuyKv9iK6n2FXgh6VAYvFEkS83DI76b2HJfppeuzd/pub?gid=822634964&output=csv&_=${Date.now()}`;
 
-// Denominator Sheet URL
-const DENOMINATOR_SHEET_URL = () =>
-  `https://docs.google.com/spreadsheets/d/e/2PACX-1vTcJSktGEdHycbjqLx-YD7-V1DUCH462h64XxaiuyKv9iK6n2FXgh6VAYvFEkS83DI76b2HJfppeuzd/pub?gid=0&output=csv&_=${Date.now()}`;
+// Denominator data comes from PROJECT_TASK_SHEET_URL (gid=822634964)
 
 /*
 |--------------------------------------------------------------------------
@@ -278,7 +276,7 @@ let denominatorCache = {
 async function fetchDenominatorSheet() {
   try {
     console.log("📊 Fetching denominator sheet...");
-    const response = await axios.get(DENOMINATOR_SHEET_URL(), {
+    const response = await axios.get(PROJECT_TASK_SHEET_URL(), {
       responseType: 'text',
       timeout: 30000
     });
@@ -359,12 +357,12 @@ async function getDenominatorData(forceRefresh = false) {
 /*
 |--------------------------------------------------------------------------
 | DENOMINATOR LOOKUP (server-side, for enriching rows)
+| 100% from Google Sheet — NO hardcoded values.
 | Priority:
-|   1. Special task rules (stitching=0, offline_posm=0.5, etc.)
-|   2. Sheet byGID match
-|   3. Sheet byProjectTask match (normalized keys)
-|   4. Task-only match (empty project key)
-|   5. Default = 1
+|   1. Exact project + task match (normalized)
+|   2. Task-only match (project stored as empty string in sheet)
+|   3. GID match
+|   4. Not found → denominator = 0 (WD = 0, row excluded from WD total)
 |--------------------------------------------------------------------------
 */
 function lookupDenominator(project, task, gid, denominatorData) {
@@ -372,39 +370,25 @@ function lookupDenominator(project, task, gid, denominatorData) {
   const normProject = normKey(project);
   const normGid     = normKey(gid);
 
-  // 1. Special hardcoded task rules (always override sheet)
-  if (['stitching', 'stitching_edit'].includes(normTask)) return 0;
-  if (['offline_posm', 'scene_recognition'].includes(normTask)) {
-    // Still check sheet first in case they want to override
-    const sheetVal = denominatorData.byProjectTask[`${normProject}||${normTask}`]
-                  ?? denominatorData.byProjectTask[`||${normTask}`];
-    return sheetVal !== undefined ? sheetVal : 0.5;
-  }
-  if (normTask === 'validation_warm_up') {
-    const sheetVal = denominatorData.byProjectTask[`${normProject}||${normTask}`]
-                  ?? denominatorData.byProjectTask[`||${normTask}`];
-    return sheetVal !== undefined ? sheetVal : 0.35;
-  }
-
-  // 2. GID match (normalized)
-  if (normGid && denominatorData.byGID[normGid] !== undefined) {
-    return denominatorData.byGID[normGid];
-  }
-
-  // 3. Exact project + task match (normalized)
+  // 1. Exact project + task match (normalized)
   const exactKey = `${normProject}||${normTask}`;
   if (denominatorData.byProjectTask[exactKey] !== undefined) {
     return denominatorData.byProjectTask[exactKey];
   }
 
-  // 4. Task-only match (project stored as empty string in sheet)
+  // 2. Task-only match (project column is empty in sheet)
   const taskOnlyKey = `||${normTask}`;
   if (denominatorData.byProjectTask[taskOnlyKey] !== undefined) {
     return denominatorData.byProjectTask[taskOnlyKey];
   }
 
-  // 5. Default
-  return 1;
+  // 3. GID match
+  if (normGid && denominatorData.byGID[normGid] !== undefined) {
+    return denominatorData.byGID[normGid];
+  }
+
+  // 4. Not in sheet → 0
+  return 0;
 }
 
 /*
