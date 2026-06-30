@@ -22,7 +22,7 @@ const TEAM_LEADERS = [
   "G26658-OTL",
   "G25883-OTL",
   "G22371-OTL",
-  "G23179- Team Leader"
+  "G23179-OTL"
 ];
 
 // Staff lookup sheet
